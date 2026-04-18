@@ -28,7 +28,7 @@
 
 using namespace std;
 
-#ifdef WIN32
+#if defined(_MSC_VER) && _MSC_VER < 1600
  #include "ms_stdint.h"
 #else
  #include <stdint.h>
@@ -42,6 +42,7 @@ using namespace std;
 #ifdef WIN32
  #include <winsock.h>
 #endif
+
 
 #include <mysql/mysql.h>
 

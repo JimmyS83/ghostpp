@@ -22,8 +22,7 @@
 #define INCLUDES_H
 
 // standard integer sizes for 64 bit compatibility
-
-#ifdef WIN32
+#if defined(_MSC_VER) && _MSC_VER < 1600
  #include "ms_stdint.h"
 #else
  #include <stdint.h>

@@ -36,9 +36,8 @@
 
 #include <string.h>
 
-#include <boost/filesystem.hpp>
-
-using namespace boost :: filesystem;
+#include <filesystem>
+using namespace std::filesystem;
 
 //
 // CAdminGame

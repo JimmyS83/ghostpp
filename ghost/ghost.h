@@ -102,6 +102,7 @@ public:
 	bool m_CheckMultipleIPUsage;			// config value: check for multiple IP address usage
 	uint32_t m_SpoofChecks;					// config value: do automatic spoof checks or not
 	bool m_RequireSpoofChecks;				// config value: require spoof checks or not
+	bool m_AllAdmins;						// config value: All players are admins
 	bool m_ReserveAdmins;					// config value: consider admins to be reserved players or not
 	bool m_RefreshMessages;					// config value: display refresh messages or not (by default)
 	bool m_AutoLock;						// config value: auto lock games when the owner is present

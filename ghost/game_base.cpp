@@ -36,6 +36,7 @@
 #include <cmath>
 #include <string.h>
 #include <time.h>
+#include <random>
 
 #include "next_combination.h"
 
@@ -3969,7 +3970,7 @@ void CBaseGame :: ShuffleSlots( )
                 for( unsigned char i = 0; i < PlayerSlots.size( ); ++i )
 			SIDs.push_back( i );
 
-		random_shuffle( SIDs.begin( ), SIDs.end( ) );
+				shuffle( SIDs.begin( ), SIDs.end( ), default_random_engine(GetTicks()) );
 
 		// now put the PlayerSlots vector in the same order as the SIDs vector
 
@@ -3987,7 +3988,7 @@ void CBaseGame :: ShuffleSlots( )
 		// regular game
 		// it's easy when we're allowed to swap the team/colour/race!
 
-		random_shuffle( PlayerSlots.begin( ), PlayerSlots.end( ) );
+		shuffle( PlayerSlots.begin( ), PlayerSlots.end( ), default_random_engine(GetTicks()) );
 	}
 
 	// now we put m_Slots back together again

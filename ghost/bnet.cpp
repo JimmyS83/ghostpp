@@ -36,9 +36,8 @@ CODE PORTED FROM THE ORIGINAL GHOST PROJECT: http://ghost.pwner.org/
 #include "gameprotocol.h"
 #include "game_base.h"
 
-#include <boost/filesystem.hpp>
-
-using namespace boost :: filesystem;
+#include <filesystem>
+using namespace std::filesystem;
 
 //
 // CBNET
@@ -1014,7 +1013,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 
 			transform( Command.begin( ), Command.end( ), Command.begin( ), (int(*)(int))tolower );
 
-			if( IsAdmin( User ) || IsRootAdmin( User ) )
+			if (m_GHost->m_AllAdmins || IsAdmin(User) || IsRootAdmin(User))
 			{
 				CONSOLE_Print( "[BNET: " + m_ServerAlias + "] admin [" + User + "] sent command [" + Message + "]" );
 
@@ -2148,7 +2147,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 			// in some cases the queue may be full of legitimate messages but we don't really care if the bot ignores one of these commands once in awhile
 			// e.g. when several users join a game at the same time and cause multiple /whois messages to be queued at once
 
-			if( IsAdmin( User ) || IsRootAdmin( User ) || ( m_PublicCommands && m_OutPackets.size( ) <= 3 ) )
+			if (Message == "?trigger" && (m_GHost->m_AllAdmins || IsAdmin(User) || IsRootAdmin(User) || (m_PublicCommands && m_OutPackets.size() <= 3)))
 			{
 				//
 				// !STATS

@@ -370,11 +370,11 @@ bool CGame :: EventPlayerBotCommand( CGamePlayer *player, string command, string
 		}
 	}
 
-	if( player->GetSpoofed( ) && ( AdminCheck || RootAdminCheck || IsOwner( User ) ) )
+	if (m_GHost->m_AllAdmins || (player->GetSpoofed() && (AdminCheck || RootAdminCheck || IsOwner(User))))
 	{
 		CONSOLE_Print( "[GAME: " + m_GameName + "] admin [" + User + "] sent command [" + Command + "] with payload [" + Payload + "]" );
 
-		if( !m_Locked || RootAdminCheck || IsOwner( User ) )
+		if (m_GHost->m_AllAdmins || !m_Locked || RootAdminCheck || IsOwner(User))
 		{
 			/*****************
 			* ADMIN COMMANDS *
