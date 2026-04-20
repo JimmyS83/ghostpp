@@ -1308,19 +1308,44 @@ void CBaseGame :: SendWelcomeMessage( CGamePlayer *player )
 	if( in.fail( ) )
 	{
 		// default welcome message
+		string T(1, m_GHost->m_CommandTrigger);
 
 		if( m_HCLCommandString.empty( ) )
 			SendChat( player, " " );
-
-		SendChat( player, " " );
-		SendChat( player, " " );
-		SendChat( player, " " );
-		SendChat( player, "GHost++                                         http://www.codelain.com/" );
-		SendChat( player, "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-" );
-		SendChat( player, "     Game Name:                 " + m_GameName );
+		if (m_GHost->m_AllAdmins)
+		{
+			SendChat(player, "J2EE GHost++                                         ");
+			SendChat(player, "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-");
+			SendChat(player, T + "start [force] - Spusti hru");
+			SendChat(player, " ");
+			SendChat(player, T + "open <cislo slotu> - Otevre prazdny slot");
+			SendChat(player, T + "close <cislo slotu> - Zavre slot (i s pocitacem pokud tam je)");
+			SendChat(player, T + "openall - Otevre vsechny sloty");
+			SendChat(player, T + "closeall - Zavre vsechny sloty");
+			SendChat(player, T + "swap <cislo slotu1> <cislo slotu2> - Prohodi hrace ve slotech");
+			SendChat(player, " ");
+			SendChat(player, T + "comp <cislo slotu> <skill> - Prida pocitac do slotu (0=easy, 1=normal, 2=insane)");
+			SendChat(player, T + "compteam <cislo slotu> <tym> - Zmeni tym pocitace (1-x)");
+			SendChat(player, T + "compcolour <cislo slotu> <barva> - Zmeni barvu pocitace (1-12)");
+			SendChat(player, T + "comphandicap <cislo slotu> <h> - Zmeni handicap pocitace (50/60/70/80/90/100)");
+			SendChat(player, T + "comprace <cislo slotu> <rasa> - Zmeni rasu pocitace (human/orc/night elf/undead/random)");
+			SendChat(player, " ");
+			SendChat(player, T + "hcl <string> - Nastavi HCL command string");
+			SendChat(player, T + "clearhcl - Vymaze HCL command string");
+			SendChat(player, " ");
+			SendChat(player, T + "autostart <min_pocet_hracu> - Auto start hry");
+			SendChat(player, T + "unhost - Zrusi lobby");
+			SendChat(player, T + "w <jmeno> <text> - Soukroma zprava (prikaz) hraci (botu)");
+			SendChat(player, " ");
+			SendChat(player, T + "latency [hodnota] - Nastavi latenci (20-500 ms)");
+			SendChat(player, " ");
+			SendChat(player, "Kompletni seznam prikazu v not_needed\\ghost_commands.txt");
+			SendChat(player, "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-");
+		}
+		SendChat( player, " Game Name: " + m_GameName );
 
 		if( !m_HCLCommandString.empty( ) )
-			SendChat( player, "     HCL Command String:  " + m_HCLCommandString );
+			SendChat( player, " HCL Command String: " + m_HCLCommandString );
 	}
 	else
 	{

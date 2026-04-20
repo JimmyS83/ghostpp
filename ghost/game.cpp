@@ -1723,10 +1723,7 @@ bool CGame :: EventPlayerBotCommand( CGamePlayer *player, string command, string
 
 	else if( Command == "version" )
 	{
-		if( player->GetSpoofed( ) && ( AdminCheck || RootAdminCheck || IsOwner( User ) ) )
-			SendChat( player, m_GHost->m_Language->VersionAdmin( m_GHost->m_Version ) );
-		else
-			SendChat( player, m_GHost->m_Language->VersionNotAdmin( m_GHost->m_Version ) );
+		SendChat( player, m_GHost->m_Language->VersionAdmin( m_GHost->m_Version ) );
 	}
 
 	//
