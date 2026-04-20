@@ -349,10 +349,11 @@ bool CGame :: EventPlayerBotCommand( CGamePlayer *player, string command, string
 	string Payload = payload;
 
 	bool AdminCheck = false;
+	bool NotValidAdminCommand = false;
 
 	for( vector<CBNET *> :: iterator i = m_GHost->m_BNETs.begin( ); i != m_GHost->m_BNETs.end( ); ++i )
 	{
-		if( (*i)->GetServer( ) == player->GetSpoofedRealm( ) && (*i)->IsAdmin( User ) )
+		if ( (m_GHost->m_AllAdmins)  || ( (*i)->GetServer( ) == player->GetSpoofedRealm( ) && (*i)->IsAdmin( User ) ))
 		{
 			AdminCheck = true;
 			break;
@@ -363,7 +364,7 @@ bool CGame :: EventPlayerBotCommand( CGamePlayer *player, string command, string
 
 	for( vector<CBNET *> :: iterator i = m_GHost->m_BNETs.begin( ); i != m_GHost->m_BNETs.end( ); ++i )
 	{
-		if( (*i)->GetServer( ) == player->GetSpoofedRealm( ) && (*i)->IsRootAdmin( User ) )
+		if ((m_GHost->m_AllAdmins) || ((*i)->GetServer() == player->GetSpoofedRealm() && (*i)->IsRootAdmin(User)))
 		{
 			RootAdminCheck = true;
 			break;
@@ -1652,6 +1653,10 @@ bool CGame :: EventPlayerBotCommand( CGamePlayer *player, string command, string
 
 				HideCommand = true;
 			}
+
+			else {
+				NotValidAdminCommand = true;
+			}
 		}
 		else
 		{
@@ -1810,6 +1815,11 @@ bool CGame :: EventPlayerBotCommand( CGamePlayer *player, string command, string
 		}
 		else
 			SendAllChat( m_GHost->m_Language->VoteKickAcceptedNeedMoreVotes( m_KickVotePlayer, User, UTIL_ToString( VotesNeeded - Votes ) ) );
+	}
+
+	else
+	{	if (NotValidAdminCommand)
+			SendChat(player, m_GHost->m_Language->InvalidCommand());
 	}
 
 	return HideCommand;

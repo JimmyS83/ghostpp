@@ -257,6 +257,32 @@ string CLanguage :: LoadingConfigFile( string file )
 	return Out;
 }
 
+string CLanguage::InvalidMapChoose(string trigger)
+{
+	string Out = m_CFG->GetString("lang_0224", "lang_0224");
+	UTIL_Replace(Out, "$TRIGGER$", trigger);
+	return Out;
+}
+
+string CLanguage::InvalidCfgChoose(string trigger)
+{
+	string Out = m_CFG->GetString("lang_0223", "lang_0223");
+	UTIL_Replace(Out, "$TRIGGER$", trigger);
+	return Out;
+}
+
+string CLanguage :: InvalidCommand( )
+{
+	return m_CFG->GetString("lang_0222", "lang_0222");
+}
+
+string CLanguage::LoadingMapFile(string file)
+{
+	string Out = m_CFG->GetString("lang_0221", "lang_0221");
+	UTIL_Replace(Out, "$FILE$", file);
+	return Out;
+}
+
 string CLanguage :: UnableToLoadConfigFileDoesntExist( string file )
 {
 	string Out = m_CFG->GetString( "lang_0030", "lang_0030" );

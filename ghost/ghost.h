@@ -64,6 +64,8 @@ public:
 	CMap *m_Map;							// the currently loaded map
 	CMap *m_AdminMap;						// the map to use in the admin game
 	CMap *m_AutoHostMap;					// the map to use when autohosting
+	vector<string> m_CachedMapList;			// cache for !listmaps indexed access
+	vector<string> m_CachedCFGList;			// cache for !listcfg indexed access
 	CSaveGame *m_SaveGame;					// the save game to use
 	vector<PIDPlayer> m_EnforcePlayers;		// vector of pids to force players to use in the next game (used with saved games)
 	bool m_Exiting;							// set to true to force ghost to shutdown next update (used by SignalCatcher)

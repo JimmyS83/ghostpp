@@ -42,6 +42,10 @@
 
 #include <signal.h>
 #include <stdlib.h>
+#include <filesystem>
+
+//using namespace std::filesystem;
+namespace fs = std::filesystem;
 
 #ifdef WIN32
  #include <ws2tcpip.h>		// for WSAIoctl
@@ -1345,6 +1349,27 @@ void CGHost :: SetConfigs( CConfig *CFG )
 	m_VirtualHostName = CFG->GetString( "bot_virtualhostname", "|cFF4080C0GHost" );
 	m_HideIPAddresses = CFG->GetInt( "bot_hideipaddresses", 0 ) == 0 ? false : true;
 	m_CheckMultipleIPUsage = CFG->GetInt( "bot_checkmultipleipusage", 1 ) == 0 ? false : true;
+
+	// fill map and cfg cache at startup
+	try {
+		fs::path p(m_MapPath);
+		if (fs::exists(p))
+			for (fs::directory_iterator i(p); i != fs::directory_iterator(); ++i)
+				if (!is_directory(i->status()))
+					m_CachedMapList.push_back(i->path().filename().string());
+		sort(m_CachedMapList.begin(), m_CachedMapList.end());
+	}
+	catch (...) {}
+
+	try {
+		fs::path p(m_MapCFGPath);
+		if (exists(p))
+			for (fs::directory_iterator i(p); i != fs::directory_iterator(); ++i)
+				if (!is_directory(i->status()) && i->path().extension() == ".cfg")
+					m_CachedCFGList.push_back(i->path().filename().string());
+		sort(m_CachedCFGList.begin(), m_CachedCFGList.end());
+	}
+	catch (...) {}
 
 	if( m_VirtualHostName.size( ) > 15 )
 	{

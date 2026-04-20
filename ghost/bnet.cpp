@@ -948,6 +948,8 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 	bool Whisper = ( Event == CBNETProtocol :: EID_WHISPER );
 	string User = chatEvent->GetUser( );
 	string Message = chatEvent->GetMessage( );
+	string T(1, m_CommandTrigger);
+	bool NotValidAdminCommand = false;
 
 	if( Event == CBNETProtocol :: EID_WHISPER || Event == CBNETProtocol :: EID_TALK )
 	{
@@ -1727,6 +1729,105 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				}
 
 				//
+				// !CFG (load map config by name or index from !listcfg)
+				//
+
+				else if (Command == "cfg")
+				{
+					if (Payload.empty())
+						QueueChatCommand(m_GHost->m_Language->CurrentlyLoadedMapCFGIs(m_GHost->m_Map->GetCFGFile()), User, Whisper);
+					else
+					{
+						// check if payload is a number index from !listcfg
+						bool IsIndex = true;
+						for (string::size_type c = 0; c < Payload.size(); ++c)
+							if (!isdigit((unsigned char)Payload[c])) { IsIndex = false; break; }
+
+						if (IsIndex)
+						{
+							uint32_t Index = UTIL_ToUInt32(Payload);
+
+							if (Index == 0 || Index > m_GHost->m_CachedCFGList.size())
+								QueueChatCommand(m_GHost->m_Language->InvalidCfgChoose(T), User, Whisper);
+							else
+							{
+								string File = m_GHost->m_CachedCFGList[Index - 1];
+								QueueChatCommand(m_GHost->m_Language->LoadingConfigFile(m_GHost->m_MapCFGPath + File), User, Whisper);
+								CConfig MapCFG;
+								MapCFG.Read(m_GHost->m_MapCFGPath + File);
+								m_GHost->m_Map->Load(&MapCFG, m_GHost->m_MapCFGPath + File);
+							}
+						}
+						else
+						{
+							string FoundMapConfigs;
+
+							try
+							{
+								path MapCFGPath(m_GHost->m_MapCFGPath);
+								string Pattern = Payload;
+								transform(Pattern.begin(), Pattern.end(), Pattern.begin(), (int(*)(int))tolower);
+
+								if (!exists(MapCFGPath))
+								{
+									CONSOLE_Print("[BNET: " + m_ServerAlias + "] error listing map configs - map config path doesn't exist");
+									QueueChatCommand(m_GHost->m_Language->ErrorListingMapConfigs(), User, Whisper);
+								}
+								else
+								{
+									directory_iterator EndIterator;
+									path LastMatch;
+									uint32_t Matches = 0;
+
+									for (directory_iterator i(MapCFGPath); i != EndIterator; ++i)
+									{
+										string FileName = i->path().filename().string();
+										string Stem = i->path().stem().string();
+										transform(FileName.begin(), FileName.end(), FileName.begin(), (int(*)(int))tolower);
+										transform(Stem.begin(), Stem.end(), Stem.begin(), (int(*)(int))tolower);
+
+										if (!is_directory(i->status()) && i->path().extension() == ".cfg" && FileName.find(Pattern) != string::npos)
+										{
+											LastMatch = i->path();
+											++Matches;
+
+											if (FoundMapConfigs.empty())
+												FoundMapConfigs = i->path().filename().string();
+											else
+												FoundMapConfigs += ", " + i->path().filename().string();
+
+											if (FileName == Pattern || Stem == Pattern)
+											{
+												Matches = 1;
+												break;
+											}
+										}
+									}
+
+									if (Matches == 0)
+										QueueChatCommand(m_GHost->m_Language->NoMapConfigsFound(), User, Whisper);
+									else if (Matches == 1)
+									{
+										string File = LastMatch.filename().string();
+										QueueChatCommand(m_GHost->m_Language->LoadingConfigFile(m_GHost->m_MapCFGPath + File), User, Whisper);
+										CConfig MapCFG;
+										MapCFG.Read(LastMatch.string());
+										m_GHost->m_Map->Load(&MapCFG, m_GHost->m_MapCFGPath + File);
+									}
+									else
+										QueueChatCommand(m_GHost->m_Language->FoundMapConfigs(FoundMapConfigs), User, Whisper);
+								}
+							}
+							catch (const exception& ex)
+							{
+								CONSOLE_Print("[BNET: " + m_ServerAlias + "] error listing map configs - caught exception [" + ex.what() + "]");
+								QueueChatCommand(m_GHost->m_Language->ErrorListingMapConfigs(), User, Whisper);
+							}
+						}
+					}
+				}
+				
+				//
 				// !LOADSG
 				//
 
@@ -1760,6 +1861,120 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				}
 
 				//
+				// !LISTMAPS
+				//
+
+				else if (Command == "listmaps")
+				{
+					try
+					{
+						path MapPath(m_GHost->m_MapPath);
+
+						if (!exists(MapPath))
+						{
+							CONSOLE_Print("[BNET: " + m_ServerAlias + "] error listing maps - map path doesn't exist");
+							QueueChatCommand(m_GHost->m_Language->ErrorListingMaps(), User, Whisper);
+						}
+						else
+						{
+							if (m_GHost->m_CachedMapList.empty())
+							{
+								QueueChatCommand(m_GHost->m_Language->NoMapsFound(), User, Whisper);
+							}
+							else
+							{
+								vector<string> Chunks;
+								string Chunk;
+
+								for( uint32_t i = 0; i < m_GHost->m_CachedMapList.size( ); ++i )
+								{
+									string Entry = UTIL_ToString( i + 1 ) + ". " + m_GHost->m_CachedMapList[i];
+									string Sep = Chunk.empty( ) ? "" : "  ";
+
+									if( !Chunk.empty( ) && Chunk.size( ) + Sep.size( ) + Entry.size( ) > m_MaxMessageLength - 8 )
+									{
+										Chunks.push_back( Chunk );
+										Chunk = Entry;
+									}
+									else
+										Chunk += Sep + Entry;
+								}
+								
+								if( !Chunk.empty( ) )
+									Chunks.push_back( Chunk );
+								
+								uint32_t Total = Chunks.size( );
+
+								for( uint32_t i = 0; i < Total; ++i )
+									QueueChatCommand( "[" + UTIL_ToString( i + 1 ) + "/" + UTIL_ToString( Total ) + "] " + Chunks[i], User, Whisper );								
+							}
+						}
+					}
+					catch (const exception& ex)
+					{
+						CONSOLE_Print("[BNET: " + m_ServerAlias + "] error listing maps - caught exception [" + ex.what() + "]");
+						QueueChatCommand(m_GHost->m_Language->ErrorListingMaps(), User, Whisper);
+					}
+				}
+
+				//
+				// !LISTCFG
+				//
+
+				else if (Command == "listcfg")
+				{
+					try
+					{
+						path MapCFGPath(m_GHost->m_MapCFGPath);
+
+						if (!exists(MapCFGPath))
+						{
+							CONSOLE_Print("[BNET: " + m_ServerAlias + "] error listing map configs - map config path doesn't exist");
+							QueueChatCommand(m_GHost->m_Language->ErrorListingMapConfigs(), User, Whisper);
+						}
+						else
+						{
+							if (m_GHost->m_CachedCFGList.empty())
+							{
+								QueueChatCommand(m_GHost->m_Language->NoMapConfigsFound(), User, Whisper);
+							}
+							else
+							{
+								vector<string> Chunks;
+								string Chunk;
+
+								for( uint32_t i = 0; i < m_GHost->m_CachedCFGList.size( ); ++i )
+								{
+									string Entry = UTIL_ToString( i + 1 ) + ". " + m_GHost->m_CachedCFGList[i];
+									string Sep = Chunk.empty( ) ? "" : "  ";
+
+									if( !Chunk.empty( ) && Chunk.size( ) + Sep.size( ) + Entry.size( ) > m_MaxMessageLength - 8 )
+									{
+										Chunks.push_back( Chunk );
+										Chunk = Entry;
+									}
+									else
+										Chunk += Sep + Entry;
+								}
+								
+								if( !Chunk.empty( ) )
+									Chunks.push_back( Chunk );
+								
+								uint32_t Total = Chunks.size( );
+
+								for( uint32_t i = 0; i < Total; ++i )
+									QueueChatCommand( "[" + UTIL_ToString( i + 1 ) + "/" + UTIL_ToString( Total ) + "] " + Chunks[i], User, Whisper );
+							}
+						}
+					}
+					catch (const exception& ex)
+					{
+						CONSOLE_Print("[BNET: " + m_ServerAlias + "] error listing map configs - caught exception [" + ex.what() + "]");
+						QueueChatCommand(m_GHost->m_Language->ErrorListingMapConfigs(), User, Whisper);
+					}
+					}
+
+				//
 				// !MAP (load map file)
 				//
 
@@ -1769,74 +1984,98 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 						QueueChatCommand( m_GHost->m_Language->CurrentlyLoadedMapCFGIs( m_GHost->m_Map->GetCFGFile( ) ), User, Whisper );
 					else
 					{
-						string FoundMaps;
+						// check if payload is a number index from !listmaps
+						bool IsIndex = true;
+						for (string::size_type c = 0; c < Payload.size(); ++c)
+							if (!isdigit((unsigned char)Payload[c])) { IsIndex = false; break; }
 
-						try
+						if (IsIndex)
 						{
-							path MapPath( m_GHost->m_MapPath );
-							string Pattern = Payload;
-							transform( Pattern.begin( ), Pattern.end( ), Pattern.begin( ), (int(*)(int))tolower );
+							uint32_t Index = UTIL_ToUInt32(Payload);
 
-							if( !exists( MapPath ) )
-							{
-								CONSOLE_Print( "[BNET: " + m_ServerAlias + "] error listing maps - map path doesn't exist" );
-								QueueChatCommand( m_GHost->m_Language->ErrorListingMaps( ), User, Whisper );
-							}
+							if (Index == 0 || Index > m_GHost->m_CachedMapList.size())
+								QueueChatCommand(m_GHost->m_Language->InvalidMapChoose(T), User, Whisper);
 							else
 							{
-								directory_iterator EndIterator;
-								path LastMatch;
-								uint32_t Matches = 0;
-
-								for( directory_iterator i( MapPath ); i != EndIterator; ++i )
-								{
-									string FileName = i->path( ).filename( ).string( );
-									string Stem = i->path( ).stem( ).string( );
-									transform( FileName.begin( ), FileName.end( ), FileName.begin( ), (int(*)(int))tolower );
-									transform( Stem.begin( ), Stem.end( ), Stem.begin( ), (int(*)(int))tolower );
-
-									if( !is_directory( i->status( ) ) && FileName.find( Pattern ) != string :: npos )
-									{
-										LastMatch = i->path( );
-										++Matches;
-
-										if( FoundMaps.empty( ) )
-											FoundMaps = i->path( ).filename( ).string( );
-										else
-											FoundMaps += ", " + i->path( ).filename( ).string( );
-
-										// if the pattern matches the filename exactly, with or without extension, stop any further matching
-
-										if( FileName == Pattern || Stem == Pattern )
-										{
-											Matches = 1;
-											break;
-										}
-									}
-								}
-
-								if( Matches == 0 )
-									QueueChatCommand( m_GHost->m_Language->NoMapsFound( ), User, Whisper );
-								else if( Matches == 1 )
-								{
-									string File = LastMatch.filename( ).string( );
-									QueueChatCommand( m_GHost->m_Language->LoadingConfigFile( File ), User, Whisper );
-
-									// hackhack: create a config file in memory with the required information to load the map
-
-									CConfig MapCFG;
-									MapCFG.Set( "map_path", "Maps\\Download\\" + File );
-									MapCFG.Set( "map_localpath", File );
-									m_GHost->m_Map->Load( &MapCFG, File );
-								}
-								else
-									QueueChatCommand( m_GHost->m_Language->FoundMaps( FoundMaps ), User, Whisper );
+								string File = m_GHost->m_CachedMapList[Index - 1];
+								QueueChatCommand(m_GHost->m_Language->LoadingMapFile(File), User, Whisper);
+								CConfig MapCFG;
+								MapCFG.Set("map_path", "Maps\\Download\\" + File);
+								MapCFG.Set("map_localpath", File);
+								m_GHost->m_Map->Load( &MapCFG, File );
 							}
 						}
-						catch( const exception &ex )
+						else
 						{
-							CONSOLE_Print( "[BNET: " + m_ServerAlias + "] error listing maps - caught exception [" + ex.what( ) + "]" );
-							QueueChatCommand( m_GHost->m_Language->ErrorListingMaps( ), User, Whisper );
+							string FoundMaps;
+
+							try
+							{
+								path MapPath(m_GHost->m_MapPath);
+								string Pattern = Payload;
+								transform(Pattern.begin(), Pattern.end(), Pattern.begin(), (int(*)(int))tolower);
+
+								if (!exists(MapPath))
+								{
+									CONSOLE_Print("[BNET: " + m_ServerAlias + "] error listing maps - map path doesn't exist");
+									QueueChatCommand(m_GHost->m_Language->ErrorListingMaps(), User, Whisper);
+								}
+								else
+								{
+									directory_iterator EndIterator;
+									path LastMatch;
+									uint32_t Matches = 0;
+
+									for (directory_iterator i(MapPath); i != EndIterator; ++i)
+									{
+										string FileName = i->path().filename().string();
+										string Stem = i->path().stem().string();
+										transform(FileName.begin(), FileName.end(), FileName.begin(), (int(*)(int))tolower);
+										transform(Stem.begin(), Stem.end(), Stem.begin(), (int(*)(int))tolower);
+
+										if (!is_directory(i->status()) && FileName.find(Pattern) != string::npos)
+										{
+											LastMatch = i->path();
+											++Matches;
+
+											if (FoundMaps.empty())
+												FoundMaps = i->path().filename().string();
+											else
+												FoundMaps += ", " + i->path().filename().string();
+
+											// if the pattern matches the filename exactly, with or without extension, stop any further matching
+
+											if (FileName == Pattern || Stem == Pattern)
+											{
+												Matches = 1;
+												break;
+											}
+										}
+									}
+
+									if (Matches == 0)
+										QueueChatCommand(m_GHost->m_Language->NoMapsFound(), User, Whisper);
+									else if (Matches == 1)
+									{
+										string File = LastMatch.filename().string();
+										QueueChatCommand(m_GHost->m_Language->LoadingMapFile(File), User, Whisper);
+
+										// hackhack: create a config file in memory with the required information to load the map
+
+										CConfig MapCFG;
+										MapCFG.Set("map_path", "Maps\\Download\\" + File);
+										MapCFG.Set("map_localpath", File);
+										m_GHost->m_Map->Load(&MapCFG, File);
+									}
+									else
+										QueueChatCommand(m_GHost->m_Language->FoundMaps(FoundMaps), User, Whisper);
+								}
+							}
+							catch (const exception& ex)
+							{
+								CONSOLE_Print("[BNET: " + m_ServerAlias + "] error listing maps - caught exception [" + ex.what() + "]");
+								QueueChatCommand(m_GHost->m_Language->ErrorListingMaps(), User, Whisper);
+							}
 						}
 					}
 				}
@@ -2134,6 +2373,12 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 					else
 						QueueChatCommand( "WARDEN STATUS --- Not connected to BNLS server.", User, Whisper );
 				}
+
+				else
+				{
+					NotValidAdminCommand = true;
+				}
+
 			}
 			else
 				CONSOLE_Print( "[BNET: " + m_ServerAlias + "] non-admin [" + User + "] sent command [" + Message + "]" );
@@ -2147,7 +2392,8 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 			// in some cases the queue may be full of legitimate messages but we don't really care if the bot ignores one of these commands once in awhile
 			// e.g. when several users join a game at the same time and cause multiple /whois messages to be queued at once
 
-			if (Message == "?trigger" && (m_GHost->m_AllAdmins || IsAdmin(User) || IsRootAdmin(User) || (m_PublicCommands && m_OutPackets.size() <= 3)))
+			//if (Message == "?trigger" && (m_GHost->m_AllAdmins || (IsAdmin(User) || IsRootAdmin(User) || (m_PublicCommands && m_OutPackets.size() <= 3))))
+			if (m_GHost->m_AllAdmins || (IsAdmin(User) || IsRootAdmin(User) || (m_PublicCommands && m_OutPackets.size() <= 3)))
 			{
 				//
 				// !STATS
@@ -2190,10 +2436,21 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 
 				else if( Command == "version" )
 				{
-					if( IsAdmin( User ) || IsRootAdmin( User ) )
+					if(m_GHost->m_AllAdmins || IsAdmin( User ) || IsRootAdmin( User ) )
 						QueueChatCommand( m_GHost->m_Language->VersionAdmin( m_GHost->m_Version ), User, Whisper );
 					else
 						QueueChatCommand( m_GHost->m_Language->VersionNotAdmin( m_GHost->m_Version ), User, Whisper );
+				}
+
+				//
+				// NOT RECOGNIZED ADMIN COMMAND
+				//
+
+				else
+				{
+					//bool NotValidCommand = true;
+					if (NotValidAdminCommand)
+						QueueChatCommand(m_GHost->m_Language->InvalidCommand(), User, Whisper);
 				}
 			}
 		}
@@ -2471,40 +2728,49 @@ void CBNET :: UnqueueGameRefreshes( )
 
 bool CBNET :: IsAdmin( string name )
 {
-	transform( name.begin( ), name.end( ), name.begin( ), (int(*)(int))tolower );
-
-	for( vector<string> :: iterator i = m_Admins.begin( ); i != m_Admins.end( ); ++i )
+	if (m_GHost->m_AllAdmins) return true;
+	else
 	{
-		if( *i == name )
-			return true;
-	}
+		transform(name.begin(), name.end(), name.begin(), (int(*)(int))tolower);
+
+		for (vector<string> ::iterator i = m_Admins.begin(); i != m_Admins.end(); ++i)
+		{
+			if (*i == name)
+				return true;
+		}
+	
 
 	return false;
+	}
 }
 
 bool CBNET :: IsRootAdmin( string name )
 {
-	// m_RootAdmin was already transformed to lower case in the constructor
-
-	transform( name.begin( ), name.end( ), name.begin( ), (int(*)(int))tolower );
-
-	// updated to permit multiple root admins seperated by a space, e.g. "Varlock Kilranin Instinct121"
-	// note: this function gets called frequently so it would be better to parse the root admins just once and store them in a list somewhere
-	// however, it's hardly worth optimizing at this point since the code's already written
-
-	stringstream SS;
-	string s;
-	SS << m_RootAdmin;
-
-	while( !SS.eof( ) )
+	if (m_GHost->m_AllAdmins) return true;
+	else
 	{
-		SS >> s;
+		// m_RootAdmin was already transformed to lower case in the constructor
 
-		if( name == s )
-			return true;
+		transform(name.begin(), name.end(), name.begin(), (int(*)(int))tolower);
+
+		// updated to permit multiple root admins seperated by a space, e.g. "Varlock Kilranin Instinct121"
+		// note: this function gets called frequently so it would be better to parse the root admins just once and store them in a list somewhere
+		// however, it's hardly worth optimizing at this point since the code's already written
+
+		stringstream SS;
+		string s;
+		SS << m_RootAdmin;
+
+		while (!SS.eof())
+		{
+			SS >> s;
+
+			if (name == s)
+				return true;
+		}
+
+		return false;
 	}
-
-	return false;
 }
 
 CDBBan *CBNET :: IsBannedName( string name )

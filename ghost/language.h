@@ -63,6 +63,10 @@ public:
 	string ThereIsNoGameInTheLobby( string current, string max );
 	string UnableToLoadConfigFilesOutside( );
 	string LoadingConfigFile( string file );
+	string InvalidCommand( );
+	string InvalidMapChoose(string trigger);
+	string InvalidCfgChoose(string trigger);
+	string LoadingMapFile(string file);
 	string UnableToLoadConfigFileDoesntExist( string file );
 	string CreatingPrivateGame( string gamename, string user );
 	string CreatingPublicGame( string gamename, string user );

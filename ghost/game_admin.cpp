@@ -1067,7 +1067,7 @@ bool CAdminGame :: EventPlayerBotCommand( CGamePlayer *player, string command, s
 						else if( Matches == 1 )
 						{
 							string File = LastMatch.filename( ).string( );
-							SendChat( player, m_GHost->m_Language->LoadingConfigFile( File ) );
+							SendChat( player, m_GHost->m_Language->LoadingMapFile( File ) );
 
 							// hackhack: create a config file in memory with the required information to load the map
 
