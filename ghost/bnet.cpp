@@ -104,6 +104,7 @@ CBNET :: CBNET( CGHost *nGHost, string nServer, string nServerAlias, string nBNL
 	m_CountryAbbrev = nCountryAbbrev;
 	m_Country = nCountry;
 	m_LocaleID = nLocaleID;
+	m_GameHostPort = 0;
 	m_UserName = nUserName;
 	m_UserPassword = nUserPassword;
 	m_FirstChannel = nFirstChannel;
@@ -882,7 +883,7 @@ void CBNET :: ProcessPackets( )
 					CONSOLE_Print( "[BNET: " + m_ServerAlias + "] logon successful" );
 					m_LoggedIn = true;
 					m_GHost->EventBNETLoggedIn( this );
-					m_Socket->PutBytes( m_Protocol->SEND_SID_NETGAMEPORT( m_GHost->m_HostPort ) );
+					m_Socket->PutBytes( m_Protocol->SEND_SID_NETGAMEPORT( GetGameHostPort( ) ) );
 					m_Socket->PutBytes( m_Protocol->SEND_SID_ENTERCHAT( ) );
 					m_Socket->PutBytes( m_Protocol->SEND_SID_FRIENDSLIST( ) );
 					m_Socket->PutBytes( m_Protocol->SEND_SID_CLANMEMBERLIST( ) );
@@ -968,27 +969,30 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 		// this case covers whispers - we assume that anyone who sends a whisper to the bot with message "spoofcheck" should be considered spoof checked
 		// note that this means you can whisper "spoofcheck" even in a public game to manually spoofcheck if the /whois fails
 
-		if( Event == CBNETProtocol :: EID_WHISPER && m_GHost->m_CurrentGame )
+		if( Event == CBNETProtocol :: EID_WHISPER && !m_GHost->m_CurrentGames.empty( ) )
 		{
-			if( Message == "s" || Message == "sc" || Message == "spoof" || Message == "check" || Message == "spoofcheck" )
-				m_GHost->m_CurrentGame->AddToSpoofed( m_Server, User, true );
-			else if( Message.find( m_GHost->m_CurrentGame->GetGameName( ) ) != string :: npos )
+			for( vector<CBaseGame *> :: iterator g = m_GHost->m_CurrentGames.begin( ); g != m_GHost->m_CurrentGames.end( ); ++g )
 			{
-				// look for messages like "entered a Warcraft III The Frozen Throne game called XYZ"
-				// we don't look for the English part of the text anymore because we want this to work with multiple languages
-				// it's a pretty safe bet that anyone whispering the bot with a message containing the game name is a valid spoofcheck
-
-				if( m_PasswordHashType == "pvpgn" && User == m_PVPGNRealmName )
+				if (Message == "s" || Message == "sc" || Message == "spoof" || Message == "check" || Message == "spoofcheck")
 				{
-					// the equivalent pvpgn message is: [PvPGN Realm] Your friend abc has entered a Warcraft III Frozen Throne game named "xyz".
-
-					vector<string> Tokens = UTIL_Tokenize( Message, ' ' );
-
-					if( Tokens.size( ) >= 3 )
-						m_GHost->m_CurrentGame->AddToSpoofed( m_Server, Tokens[2], false );
+					if ((*g)->GetPlayerFromName(User, false))  // if player is in the lobby
+					{
+						(*g)->AddToSpoofed(m_Server, User, true);
+						break;
+					}
 				}
-				else
-					m_GHost->m_CurrentGame->AddToSpoofed( m_Server, User, false );
+				else if( Message.find( (*g)->GetGameName( ) ) != string :: npos )
+				{
+					if( m_PasswordHashType == "pvpgn" && User == m_PVPGNRealmName )
+					{
+						vector<string> Tokens = UTIL_Tokenize( Message, ' ' );
+
+						if( Tokens.size( ) >= 3 )
+							(*g)->AddToSpoofed( m_Server, Tokens[2], false );
+					}
+					else
+						(*g)->AddToSpoofed( m_Server, User, false );
+				}
 			}
 		}
 
@@ -1075,12 +1079,12 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				// !ANNOUNCE
 				//
 
-				else if( Command == "announce" && m_GHost->m_CurrentGame && !m_GHost->m_CurrentGame->GetCountDownStarted( ) )
+				else if( Command == "announce" && m_GHost->GetManualLobby( ) && !m_GHost->GetManualLobby( )->GetCountDownStarted( ) )
 				{
 					if( Payload.empty( ) || Payload == "off" )
 					{
 						QueueChatCommand( m_GHost->m_Language->AnnounceMessageDisabled( ), User, Whisper );
-						m_GHost->m_CurrentGame->SetAnnounce( 0, string( ) );
+						m_GHost->GetManualLobby( )->SetAnnounce( 0, string( ) );
 					}
 					else
 					{
@@ -1108,7 +1112,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 									Message = Message.substr( Start );
 
 								QueueChatCommand( m_GHost->m_Language->AnnounceMessageEnabled( ), User, Whisper );
-								m_GHost->m_CurrentGame->SetAnnounce( Interval, Message );
+								m_GHost->GetManualLobby( )->SetAnnounce( Interval, Message );
 							}
 						}
 					}
@@ -1134,6 +1138,11 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 							m_GHost->m_AutoHostMatchMaking = false;
 							m_GHost->m_AutoHostMinimumScore = 0.0;
 							m_GHost->m_AutoHostMaximumScore = 0.0;
+
+							for( vector<CGHost :: CAutoHostSlot> :: iterator i = m_GHost->m_AutoHostSlots.begin( ); i != m_GHost->m_AutoHostSlots.end( ); ++i )
+								delete i->Map;
+
+							m_GHost->m_AutoHostSlots.clear( );
 						}
 						else
 						{
@@ -1282,12 +1291,12 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				// !AUTOSTART
 				//
 
-				else if( Command == "autostart" && m_GHost->m_CurrentGame && !m_GHost->m_CurrentGame->GetCountDownStarted( ) )
+				else if( Command == "autostart" && m_GHost->GetManualLobby( ) && !m_GHost->GetManualLobby( )->GetCountDownStarted( ) )
 				{
 					if( Payload.empty( ) || Payload == "off" )
 					{
 						QueueChatCommand( m_GHost->m_Language->AutoStartDisabled( ), User, Whisper );
-						m_GHost->m_CurrentGame->SetAutoStartPlayers( 0 );
+						m_GHost->GetManualLobby( )->SetAutoStartPlayers( 0 );
 					}
 					else
 					{
@@ -1296,7 +1305,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 						if( AutoStartPlayers != 0 )
 						{
 							QueueChatCommand( m_GHost->m_Language->AutoStartEnabled( UTIL_ToString( AutoStartPlayers ) ), User, Whisper );
-							m_GHost->m_CurrentGame->SetAutoStartPlayers( AutoStartPlayers );
+							m_GHost->GetManualLobby( )->SetAutoStartPlayers( AutoStartPlayers );
 						}
 					}
 				}
@@ -1343,9 +1352,9 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				// !CLOSE (close slot)
 				//
 
-				else if( Command == "close" && !Payload.empty( ) && m_GHost->m_CurrentGame )
+				else if( Command == "close" && !Payload.empty( ) && m_GHost->GetManualLobby( ) )
 				{
-					if( !m_GHost->m_CurrentGame->GetLocked( ) )
+					if( !m_GHost->GetManualLobby( )->GetLocked( ) )
 					{
 						// close as many slots as specified, e.g. "5 10" closes slots 5 and 10
 
@@ -1363,7 +1372,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 								break;
 							}
 							else
-								m_GHost->m_CurrentGame->CloseSlot( (unsigned char)( SID - 1 ), true );
+								m_GHost->GetManualLobby( )->CloseSlot( (unsigned char)( SID - 1 ), true );
 						}
 					}
 					else
@@ -1374,10 +1383,10 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				// !CLOSEALL
 				//
 
-				else if( Command == "closeall" && m_GHost->m_CurrentGame )
+				else if( Command == "closeall" && m_GHost->GetManualLobby( ) )
 				{
-					if( !m_GHost->m_CurrentGame->GetLocked( ) )
-						m_GHost->m_CurrentGame->CloseAllSlots( );
+					if( !m_GHost->GetManualLobby( )->GetLocked( ) )
+						m_GHost->GetManualLobby( )->CloseAllSlots( );
 					else
 						QueueChatCommand( m_GHost->m_Language->TheGameIsLockedBNET( ), User, Whisper );
 				}
@@ -1558,7 +1567,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 							m_Exiting = true;
 						else
 						{
-							if( m_GHost->m_CurrentGame || !m_GHost->m_Games.empty( ) )
+							if( !m_GHost->m_CurrentGames.empty( ) || !m_GHost->m_Games.empty( ) )
 								QueueChatCommand( m_GHost->m_Language->AtLeastOneGameActiveUseForceToShutdown( ), User, Whisper );
 							else
 								m_Exiting = true;
@@ -1608,8 +1617,8 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 
 				else if( Command == "getgames" )
 				{
-					if( m_GHost->m_CurrentGame )
-						QueueChatCommand( m_GHost->m_Language->GameIsInTheLobby( m_GHost->m_CurrentGame->GetDescription( ), UTIL_ToString( m_GHost->m_Games.size( ) ), UTIL_ToString( m_GHost->m_MaxGames ) ), User, Whisper );
+					if( m_GHost->GetManualLobby( ) )
+						QueueChatCommand( m_GHost->m_Language->GameIsInTheLobby( m_GHost->GetManualLobby( )->GetDescription( ), UTIL_ToString( m_GHost->m_Games.size( ) ), UTIL_ToString( m_GHost->m_MaxGames ) ), User, Whisper );
 					else
 						QueueChatCommand( m_GHost->m_Language->ThereIsNoGameInTheLobby( UTIL_ToString( m_GHost->m_Games.size( ) ), UTIL_ToString( m_GHost->m_MaxGames ) ), User, Whisper );
 				}
@@ -1618,7 +1627,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				// !HOLD (hold a slot for someone)
 				//
 
-				else if( Command == "hold" && !Payload.empty( ) && m_GHost->m_CurrentGame )
+				else if( Command == "hold" && !Payload.empty( ) && m_GHost->GetManualLobby( ) )
 				{
 					// hold as many players as specified, e.g. "Varlock Kilranin" holds players "Varlock" and "Kilranin"
 
@@ -1638,7 +1647,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 						else
 						{
 							QueueChatCommand( m_GHost->m_Language->AddedPlayerToTheHoldList( HoldName ), User, Whisper );
-							m_GHost->m_CurrentGame->AddToReserved( HoldName );
+							m_GHost->GetManualLobby( )->AddToReserved( HoldName );
 						}
 					}
 				}
@@ -1648,7 +1657,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				//
 
 				else if( Command == "hostsg" && !Payload.empty( ) )
-					m_GHost->CreateGame( m_GHost->m_Map, GAME_PRIVATE, true, Payload, User, User, m_Server, Whisper );
+					m_GHost->CreateGame( m_GHost->m_Map, GAME_PRIVATE, true, Payload, User, User, m_Server, Whisper, false, this );
 
 				//
 				// !LOAD (load config file)
@@ -1844,7 +1853,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 
 						if( UTIL_FileExists( File ) )
 						{
-							if( m_GHost->m_CurrentGame )
+							if( m_GHost->GetManualLobby( ) )
 								QueueChatCommand( m_GHost->m_Language->UnableToLoadSaveGameGameInLobby( ), User, Whisper );
 							else
 							{
@@ -2084,9 +2093,9 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				// !OPEN (open slot)
 				//
 
-				else if( Command == "open" && !Payload.empty( ) && m_GHost->m_CurrentGame )
+				else if( Command == "open" && !Payload.empty( ) && m_GHost->GetManualLobby( ) )
 				{
-					if( !m_GHost->m_CurrentGame->GetLocked( ) )
+					if( !m_GHost->GetManualLobby( )->GetLocked( ) )
 					{
 						// open as many slots as specified, e.g. "5 10" opens slots 5 and 10
 
@@ -2104,7 +2113,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 								break;
 							}
 							else
-								m_GHost->m_CurrentGame->OpenSlot( (unsigned char)( SID - 1 ), true );
+								m_GHost->GetManualLobby( )->OpenSlot( (unsigned char)( SID - 1 ), true );
 						}
 					}
 					else
@@ -2115,10 +2124,10 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				// !OPENALL
 				//
 
-				else if( Command == "openall" && m_GHost->m_CurrentGame )
+				else if( Command == "openall" && m_GHost->GetManualLobby( ) )
 				{
-					if( !m_GHost->m_CurrentGame->GetLocked( ) )
-						m_GHost->m_CurrentGame->OpenAllSlots( );
+					if( !m_GHost->GetManualLobby( )->GetLocked( ) )
+						m_GHost->GetManualLobby( )->OpenAllSlots( );
 					else
 						QueueChatCommand( m_GHost->m_Language->TheGameIsLockedBNET( ), User, Whisper );
 				}
@@ -2128,7 +2137,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				//
 
 				else if( Command == "priv" && !Payload.empty( ) )
-					m_GHost->CreateGame( m_GHost->m_Map, GAME_PRIVATE, false, Payload, User, User, m_Server, Whisper );
+					m_GHost->CreateGame( m_GHost->m_Map, GAME_PRIVATE, false, Payload, User, User, m_Server, Whisper, false, this );
 
 				//
 				// !PRIVBY (host private game by other player)
@@ -2147,7 +2156,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 					{
 						Owner = Payload.substr( 0, GameNameStart );
 						GameName = Payload.substr( GameNameStart + 1 );
-						m_GHost->CreateGame( m_GHost->m_Map, GAME_PRIVATE, false, GameName, Owner, User, m_Server, Whisper );
+						m_GHost->CreateGame( m_GHost->m_Map, GAME_PRIVATE, false, GameName, Owner, User, m_Server, Whisper, false, this );
 					}
 				}
 
@@ -2156,7 +2165,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				//
 
 				else if( Command == "pub" && !Payload.empty( ) )
-					m_GHost->CreateGame( m_GHost->m_Map, GAME_PUBLIC, false, Payload, User, User, m_Server, Whisper );
+					m_GHost->CreateGame( m_GHost->m_Map, GAME_PUBLIC, false, Payload, User, User, m_Server, Whisper, false, this );
 
 				//
 				// !PUBBY (host public game by other player)
@@ -2175,7 +2184,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 					{
 						Owner = Payload.substr( 0, GameNameStart );
 						GameName = Payload.substr( GameNameStart + 1 );
-						m_GHost->CreateGame( m_GHost->m_Map, GAME_PUBLIC, false, GameName, Owner, User, m_Server, Whisper );
+						m_GHost->CreateGame( m_GHost->m_Map, GAME_PUBLIC, false, GameName, Owner, User, m_Server, Whisper, false, this );
 					}
 				}
 
@@ -2257,8 +2266,8 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				{
 					if( IsRootAdmin( User ) )
 					{
-						if( m_GHost->m_CurrentGame )
-							m_GHost->m_CurrentGame->SendAllChat( Payload );
+						if( m_GHost->GetManualLobby( ) )
+							m_GHost->GetManualLobby( )->SendAllChat( Payload );
 
 						for( vector<CBaseGame *> :: iterator i = m_GHost->m_Games.begin( ); i != m_GHost->m_Games.end( ); ++i )
 							(*i)->SendAllChat( "ADMIN: " + Payload );
@@ -2271,12 +2280,12 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				// !SP
 				//
 
-				else if( Command == "sp" && m_GHost->m_CurrentGame && !m_GHost->m_CurrentGame->GetCountDownStarted( ) )
+				else if( Command == "sp" && m_GHost->GetManualLobby( ) && !m_GHost->GetManualLobby( )->GetCountDownStarted( ) )
 				{
-					if( !m_GHost->m_CurrentGame->GetLocked( ) )
+					if( !m_GHost->GetManualLobby( )->GetLocked( ) )
 					{
-						m_GHost->m_CurrentGame->SendAllChat( m_GHost->m_Language->ShufflingPlayers( ) );
-						m_GHost->m_CurrentGame->ShuffleSlots( );
+						m_GHost->GetManualLobby( )->SendAllChat( m_GHost->m_Language->ShufflingPlayers( ) );
+						m_GHost->GetManualLobby( )->ShuffleSlots( );
 					}
 					else
 						QueueChatCommand( m_GHost->m_Language->TheGameIsLockedBNET( ), User, Whisper );
@@ -2286,17 +2295,17 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				// !START
 				//
 
-				else if( Command == "start" && m_GHost->m_CurrentGame && !m_GHost->m_CurrentGame->GetCountDownStarted( ) && m_GHost->m_CurrentGame->GetNumHumanPlayers( ) > 0 )
+				else if( Command == "start" && m_GHost->GetManualLobby( ) && !m_GHost->GetManualLobby( )->GetCountDownStarted( ) && m_GHost->GetManualLobby( )->GetNumHumanPlayers( ) > 0 )
 				{
-					if( !m_GHost->m_CurrentGame->GetLocked( ) )
+					if( !m_GHost->GetManualLobby( )->GetLocked( ) )
 					{
 						// if the player sent "!start force" skip the checks and start the countdown
 						// otherwise check that the game is ready to start
 
 						if( Payload == "force" )
-							m_GHost->m_CurrentGame->StartCountDown( true );
+							m_GHost->GetManualLobby( )->StartCountDown( true );
 						else
-							m_GHost->m_CurrentGame->StartCountDown( false );
+							m_GHost->GetManualLobby( )->StartCountDown( false );
 					}
 					else
 						QueueChatCommand( m_GHost->m_Language->TheGameIsLockedBNET( ), User, Whisper );
@@ -2306,9 +2315,9 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				// !SWAP (swap slots)
 				//
 
-				else if( Command == "swap" && !Payload.empty( ) && m_GHost->m_CurrentGame )
+				else if( Command == "swap" && !Payload.empty( ) && m_GHost->GetManualLobby( ) )
 				{
-					if( !m_GHost->m_CurrentGame->GetLocked( ) )
+					if( !m_GHost->GetManualLobby( )->GetLocked( ) )
 					{
 						uint32_t SID1;
 						uint32_t SID2;
@@ -2329,7 +2338,7 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 								if( SS.fail( ) )
 									CONSOLE_Print( "[BNET: " + m_ServerAlias + "] bad input #2 to swap command" );
 								else
-									m_GHost->m_CurrentGame->SwapSlots( (unsigned char)( SID1 - 1 ), (unsigned char)( SID2 - 1 ) );
+									m_GHost->GetManualLobby( )->SwapSlots( (unsigned char)( SID1 - 1 ), (unsigned char)( SID2 - 1 ) );
 							}
 						}
 					}
@@ -2343,19 +2352,19 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 
 				else if( Command == "unhost" )
 				{
-					if( m_GHost->m_CurrentGame )
+					if( m_GHost->GetManualLobby( ) )
 					{
-						if( m_GHost->m_CurrentGame->GetCountDownStarted( ) )
-							QueueChatCommand( m_GHost->m_Language->UnableToUnhostGameCountdownStarted( m_GHost->m_CurrentGame->GetDescription( ) ), User, Whisper );
+						if( m_GHost->GetManualLobby( )->GetCountDownStarted( ) )
+							QueueChatCommand( m_GHost->m_Language->UnableToUnhostGameCountdownStarted( m_GHost->GetManualLobby( )->GetDescription( ) ), User, Whisper );
 
 						// if the game owner is still in the game only allow the root admin to unhost the game
 
-						else if( m_GHost->m_CurrentGame->GetPlayerFromName( m_GHost->m_CurrentGame->GetOwnerName( ), false ) && !IsRootAdmin( User ) )
-							QueueChatCommand( m_GHost->m_Language->CantUnhostGameOwnerIsPresent( m_GHost->m_CurrentGame->GetOwnerName( ) ), User, Whisper );
+						else if( m_GHost->GetManualLobby( )->GetPlayerFromName( m_GHost->GetManualLobby( )->GetOwnerName( ), false ) && !IsRootAdmin( User ) )
+							QueueChatCommand( m_GHost->m_Language->CantUnhostGameOwnerIsPresent( m_GHost->GetManualLobby( )->GetOwnerName( ) ), User, Whisper );
 						else
 						{
-							QueueChatCommand( m_GHost->m_Language->UnhostingGame( m_GHost->m_CurrentGame->GetDescription( ) ), User, Whisper );
-							m_GHost->m_CurrentGame->SetExiting( true );
+							QueueChatCommand( m_GHost->m_Language->UnhostingGame( m_GHost->GetManualLobby( )->GetDescription( ) ), User, Whisper );
+							m_GHost->GetManualLobby( )->SetExiting( true );
 						}
 					}
 					else
@@ -2481,20 +2490,27 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 		// this case covers whois results which are used when hosting a public game (we send out a "/whois [player]" for each player)
 		// at all times you can still /w the bot with "spoofcheck" to manually spoof check
 
-		if( m_GHost->m_CurrentGame && m_GHost->m_CurrentGame->GetPlayerFromName( UserName, true ) )
+		CBaseGame *SpoofCheckGame = NULL;
+
+		for( vector<CBaseGame *> :: iterator g = m_GHost->m_CurrentGames.begin( ); g != m_GHost->m_CurrentGames.end( ); ++g )
+		{
+			if( (*g)->GetPlayerFromName( UserName, true ) ) { SpoofCheckGame = *g; break; }
+		}
+
+		if( SpoofCheckGame )
 		{
 			if( Message.find( "is away" ) != string :: npos )
-				m_GHost->m_CurrentGame->SendAllChat( m_GHost->m_Language->SpoofPossibleIsAway( UserName ) );
+				SpoofCheckGame->SendAllChat( m_GHost->m_Language->SpoofPossibleIsAway( UserName ) );
 			else if( Message.find( "is unavailable" ) != string :: npos )
-				m_GHost->m_CurrentGame->SendAllChat( m_GHost->m_Language->SpoofPossibleIsUnavailable( UserName ) );
+				SpoofCheckGame->SendAllChat( m_GHost->m_Language->SpoofPossibleIsUnavailable( UserName ) );
 			else if( Message.find( "is refusing messages" ) != string :: npos )
-				m_GHost->m_CurrentGame->SendAllChat( m_GHost->m_Language->SpoofPossibleIsRefusingMessages( UserName ) );
+				SpoofCheckGame->SendAllChat( m_GHost->m_Language->SpoofPossibleIsRefusingMessages( UserName ) );
 			else if( Message.find( "is using Warcraft III The Frozen Throne in the channel" ) != string :: npos )
-				m_GHost->m_CurrentGame->SendAllChat( m_GHost->m_Language->SpoofDetectedIsNotInGame( UserName ) );
+				SpoofCheckGame->SendAllChat( m_GHost->m_Language->SpoofDetectedIsNotInGame( UserName ) );
 			else if( Message.find( "is using Warcraft III The Frozen Throne in channel" ) != string :: npos )
-				m_GHost->m_CurrentGame->SendAllChat( m_GHost->m_Language->SpoofDetectedIsNotInGame( UserName ) );
+				SpoofCheckGame->SendAllChat( m_GHost->m_Language->SpoofDetectedIsNotInGame( UserName ) );
 			else if( Message.find( "is using Warcraft III The Frozen Throne in a private channel" ) != string :: npos )
-				m_GHost->m_CurrentGame->SendAllChat( m_GHost->m_Language->SpoofDetectedIsInPrivateChannel( UserName ) );
+				SpoofCheckGame->SendAllChat( m_GHost->m_Language->SpoofDetectedIsInPrivateChannel( UserName ) );
 
 			if( Message.find( "is using Warcraft III The Frozen Throne in game" ) != string :: npos || Message.find( "is using Warcraft III Frozen Throne and is currently in  game" ) != string :: npos )
 			{
@@ -2502,10 +2518,10 @@ void CBNET :: ProcessChatEvent( CIncomingChatEvent *chatEvent )
 				// this is because when the game is rehosted, players who joined recently will be in the previous game according to battle.net
 				// note: if the game is rehosted more than once it is possible (but unlikely) for a false positive because only two game names are checked
 
-				if( Message.find( m_GHost->m_CurrentGame->GetGameName( ) ) != string :: npos || Message.find( m_GHost->m_CurrentGame->GetLastGameName( ) ) != string :: npos )
-					m_GHost->m_CurrentGame->AddToSpoofed( m_Server, UserName, false );
+				if( Message.find( SpoofCheckGame->GetGameName( ) ) != string :: npos || Message.find( SpoofCheckGame->GetLastGameName( ) ) != string :: npos )
+					SpoofCheckGame->AddToSpoofed( m_Server, UserName, false );
 				else
-					m_GHost->m_CurrentGame->SendAllChat( m_GHost->m_Language->SpoofDetectedIsInAnotherGame( UserName ) );
+					SpoofCheckGame->SendAllChat( m_GHost->m_Language->SpoofDetectedIsInAnotherGame( UserName ) );
 			}
 		}
 	}
@@ -2534,6 +2550,16 @@ void CBNET :: SendGetClanList( )
 {
 	if( m_LoggedIn )
 		m_Socket->PutBytes( m_Protocol->SEND_SID_CLANMEMBERLIST( ) );
+}
+
+void CBNET :: UpdateGameHostPort( uint16_t port )
+{
+	m_GameHostPort = port;
+
+	// if already logged in, tell PVPGN/BNET about the new port immediately
+	// (PVPGN accepts SID_NETGAMEPORT at any time, not only at login)
+	if( m_LoggedIn )
+		m_OutPackets.push( m_Protocol->SEND_SID_NETGAMEPORT( port ) );
 }
 
 void CBNET :: QueueEnterChat( )

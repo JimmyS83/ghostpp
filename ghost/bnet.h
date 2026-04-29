@@ -92,6 +92,7 @@ private:
 	string m_CountryAbbrev;							// country abbreviation
 	string m_Country;								// country
 	uint32_t m_LocaleID;							// see: http://msdn.microsoft.com/en-us/library/0h88fahh%28VS.85%29.aspx
+	uint16_t m_GameHostPort;						// port reported to BNET for game hosting; 0 = use m_GHost->m_HostPort
 	string m_UserName;								// battle.net username
 	string m_UserPassword;							// battle.net password
 	string m_FirstChannel;							// the first chat channel to join upon entering chat (note: we hijack this to store the last channel when entering a game)
@@ -130,6 +131,7 @@ public:
 	string GetServerAlias( )			{ return m_ServerAlias; }
 	string GetCDKeyROC( )				{ return m_CDKeyROC; }
 	string GetCDKeyTFT( )				{ return m_CDKeyTFT; }
+	uint16_t GetGameHostPort( )			{ return m_GameHostPort > 0 ? m_GameHostPort : m_GHost->m_HostPort; }
 	string GetUserName( )				{ return m_UserName; }
 	string GetUserPassword( )			{ return m_UserPassword; }
 	string GetFirstChannel( )			{ return m_FirstChannel; }
@@ -163,6 +165,7 @@ public:
 	void SendGetFriendsList( );
 	void SendGetClanList( );
 	void QueueEnterChat( );
+	void UpdateGameHostPort( uint16_t port );
 	void QueueChatCommand( string chatCommand );
 	void QueueChatCommand( string chatCommand, string user, bool whisper );
 	void QueueGameCreate( unsigned char state, string gameName, string hostName, CMap *map, CSaveGame *saveGame, uint32_t hostCounter );

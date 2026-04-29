@@ -409,6 +409,11 @@ bool CAdminGame :: EventPlayerBotCommand( CGamePlayer *player, string command, s
 				m_GHost->m_AutoHostMatchMaking = false;
 				m_GHost->m_AutoHostMinimumScore = 0.0;
 				m_GHost->m_AutoHostMaximumScore = 0.0;
+
+				for( vector<CGHost :: CAutoHostSlot> :: iterator i = m_GHost->m_AutoHostSlots.begin( ); i != m_GHost->m_AutoHostSlots.end( ); ++i )
+					delete i->Map;
+
+				m_GHost->m_AutoHostSlots.clear( );
 			}
 			else
 			{
@@ -478,6 +483,11 @@ bool CAdminGame :: EventPlayerBotCommand( CGamePlayer *player, string command, s
 				m_GHost->m_AutoHostMatchMaking = false;
 				m_GHost->m_AutoHostMinimumScore = 0.0;
 				m_GHost->m_AutoHostMaximumScore = 0.0;
+
+				for( vector<CGHost :: CAutoHostSlot> :: iterator i = m_GHost->m_AutoHostSlots.begin( ); i != m_GHost->m_AutoHostSlots.end( ); ++i )
+					delete i->Map;
+
+				m_GHost->m_AutoHostSlots.clear( );
 			}
 			else
 			{
@@ -855,7 +865,7 @@ bool CAdminGame :: EventPlayerBotCommand( CGamePlayer *player, string command, s
 				m_Exiting = true;
 			else
 			{
-				if( m_GHost->m_CurrentGame || !m_GHost->m_Games.empty( ) )
+				if( !m_GHost->m_CurrentGames.empty( ) || !m_GHost->m_Games.empty( ) )
 					SendChat( player, m_GHost->m_Language->AtLeastOneGameActiveUseForceToShutdown( ) );
 				else
 					m_Exiting = true;
@@ -882,8 +892,17 @@ bool CAdminGame :: EventPlayerBotCommand( CGamePlayer *player, string command, s
 
                 else if( Command == "getgames" )
 		{
-			if( m_GHost->m_CurrentGame )
-				SendChat( player, m_GHost->m_Language->GameIsInTheLobby( m_GHost->m_CurrentGame->GetDescription( ), UTIL_ToString( m_GHost->m_Games.size( ) ), UTIL_ToString( m_GHost->m_MaxGames ) ) );
+			if( !m_GHost->m_CurrentGames.empty( ) )
+			{
+				for( uint32_t gi = 0; gi < m_GHost->m_CurrentGames.size( ); ++gi )
+				{
+					CBaseGame *g = m_GHost->m_CurrentGames[gi];
+					string Label = g->GetIsAutoHostGame( ) ? "[autohost]" : "[manual]";
+					SendChat( player, "Lobby #" + UTIL_ToString( gi + 1 ) + " " + Label + " " + g->GetDescription( ) );
+				}
+
+				SendChat( player, m_GHost->m_Language->GameIsInTheLobby( m_GHost->m_CurrentGames[0]->GetDescription( ), UTIL_ToString( m_GHost->m_Games.size( ) ), UTIL_ToString( m_GHost->m_MaxGames ) ) );
+			}
 			else
 				SendChat( player, m_GHost->m_Language->ThereIsNoGameInTheLobby( UTIL_ToString( m_GHost->m_Games.size( ) ), UTIL_ToString( m_GHost->m_MaxGames ) ) );
 		}
@@ -990,7 +1009,7 @@ bool CAdminGame :: EventPlayerBotCommand( CGamePlayer *player, string command, s
 
 				if( UTIL_FileExists( File ) )
 				{
-					if( m_GHost->m_CurrentGame )
+					if( !m_GHost->m_CurrentGames.empty( ) )
 						SendChat( player, m_GHost->m_Language->UnableToLoadSaveGameGameInLobby( ) );
 					else
 					{
@@ -1207,8 +1226,8 @@ bool CAdminGame :: EventPlayerBotCommand( CGamePlayer *player, string command, s
 
                 else if( Command == "saygames" && !Payload.empty( ) )
 		{
-			if( m_GHost->m_CurrentGame )
-				m_GHost->m_CurrentGame->SendAllChat( Payload );
+			for( vector<CBaseGame *> :: iterator i = m_GHost->m_CurrentGames.begin( ); i != m_GHost->m_CurrentGames.end( ); ++i )
+				(*i)->SendAllChat( Payload );
 
                         for( vector<CBaseGame *> :: iterator i = m_GHost->m_Games.begin( ); i != m_GHost->m_Games.end( ); ++i )
 				(*i)->SendAllChat( "ADMIN: " + Payload );
@@ -1220,18 +1239,42 @@ bool CAdminGame :: EventPlayerBotCommand( CGamePlayer *player, string command, s
 
                 else if( Command == "unhost" )
 		{
-			if( m_GHost->m_CurrentGame )
 			{
-				if( m_GHost->m_CurrentGame->GetCountDownStarted( ) )
-					SendChat( player, m_GHost->m_Language->UnableToUnhostGameCountdownStarted( m_GHost->m_CurrentGame->GetDescription( ) ) );
-				else
+				CBaseGame *UnhostTarget = NULL;
+
+				if( !Payload.empty( ) )
 				{
-					SendChat( player, m_GHost->m_Language->UnhostingGame( m_GHost->m_CurrentGame->GetDescription( ) ) );
-					m_GHost->m_CurrentGame->SetExiting( true );
+					bool IsNum = true;
+
+					for( string::size_type c = 0; c < Payload.size( ); ++c )
+						if( !isdigit( (unsigned char)Payload[c] ) ) { IsNum = false; break; }
+
+					if( IsNum )
+					{
+						uint32_t Idx = UTIL_ToUInt32( Payload );
+
+						if( Idx >= 1 && Idx <= m_GHost->m_CurrentGames.size( ) )
+							UnhostTarget = m_GHost->m_CurrentGames[Idx - 1];
+						else
+							SendChat( player, "Invalid lobby number. Use !getgames to see available lobbies." );
+					}
 				}
+				else
+					UnhostTarget = m_GHost->GetManualLobby( );
+
+				if( UnhostTarget )
+				{
+					if( UnhostTarget->GetCountDownStarted( ) )
+						SendChat( player, m_GHost->m_Language->UnableToUnhostGameCountdownStarted( UnhostTarget->GetDescription( ) ) );
+					else
+					{
+						SendChat( player, m_GHost->m_Language->UnhostingGame( UnhostTarget->GetDescription( ) ) );
+						UnhostTarget->SetExiting( true );
+					}
+				}
+				else if( Payload.empty( ) )
+					SendChat( player, m_GHost->m_Language->UnableToUnhostGameNoGameInLobby( ) );
 			}
-			else
-				SendChat( player, m_GHost->m_Language->UnableToUnhostGameNoGameInLobby( ) );
 		}
 
 		//

@@ -44,7 +44,7 @@
 // CBaseGame
 //
 
-CBaseGame :: CBaseGame( CGHost *nGHost, CMap *nMap, CSaveGame *nSaveGame, uint16_t nHostPort, unsigned char nGameState, string nGameName, string nOwnerName, string nCreatorName, string nCreatorServer ) : m_GHost( nGHost ), m_SaveGame( nSaveGame ), m_Replay( NULL ), m_Exiting( false ), m_Saving( false ), m_HostPort( nHostPort ), m_GameState( nGameState ), m_VirtualHostPID( 255 ), m_FakePlayerPID( 255 ), m_GProxyEmptyActions( 0 ), m_GameName( nGameName ), m_LastGameName( nGameName ), m_VirtualHostName( m_GHost->m_VirtualHostName ), m_OwnerName( nOwnerName ), m_CreatorName( nCreatorName ), m_CreatorServer( nCreatorServer ), m_HCLCommandString( nMap->GetMapDefaultHCL( ) ), m_RandomSeed( GetTicks( ) ), m_HostCounter( m_GHost->m_HostCounter++ ), m_EntryKey( rand( ) ), m_Latency( m_GHost->m_Latency ), m_SyncLimit( m_GHost->m_SyncLimit ), m_SyncCounter( 0 ), m_GameTicks( 0 ), m_CreationTime( GetTime( ) ), m_LastPingTime( GetTime( ) ), m_LastRefreshTime( GetTime( ) ), m_LastDownloadTicks( GetTime( ) ), m_DownloadCounter( 0 ), m_LastDownloadCounterResetTicks( GetTime( ) ), m_LastAnnounceTime( 0 ), m_AnnounceInterval( 0 ), m_LastAutoStartTime( GetTime( ) ), m_AutoStartPlayers( 0 ), m_LastCountDownTicks( 0 ), m_CountDownCounter( 0 ), m_StartedLoadingTicks( 0 ), m_StartPlayers( 0 ), m_LastLagScreenResetTime( 0 ), m_LastActionSentTicks( 0 ), m_LastActionLateBy( 0 ), m_StartedLaggingTime( 0 ), m_LastLagScreenTime( 0 ), m_LastReservedSeen( GetTime( ) ), m_StartedKickVoteTime( 0 ), m_GameOverTime( 0 ), m_LastPlayerLeaveTicks( 0 ), m_MinimumScore( 0. ), m_MaximumScore( 0. ), m_SlotInfoChanged( false ), m_Locked( false ), m_RefreshMessages( m_GHost->m_RefreshMessages ), m_RefreshError( false ), m_RefreshRehosted( false ), m_MuteAll( false ), m_MuteLobby( false ), m_CountDownStarted( false ), m_GameLoading( false ), m_GameLoaded( false ), m_LoadInGame( nMap->GetMapLoadInGame( ) ), m_Lagging( false ), m_AutoSave( m_GHost->m_AutoSave ), m_MatchMaking( false ), m_LocalAdminMessages( m_GHost->m_LocalAdminMessages )
+CBaseGame :: CBaseGame( CGHost *nGHost, CMap *nMap, CSaveGame *nSaveGame, uint16_t nHostPort, unsigned char nGameState, string nGameName, string nOwnerName, string nCreatorName, string nCreatorServer ) : m_GHost( nGHost ), m_SaveGame( nSaveGame ), m_Replay( NULL ), m_Exiting( false ), m_Saving( false ), m_HostPort( nHostPort ), m_GameState( nGameState ), m_VirtualHostPID( 255 ), m_FakePlayerPID( 255 ), m_GProxyEmptyActions( 0 ), m_GameName( nGameName ), m_LastGameName( nGameName ), m_VirtualHostName( m_GHost->m_VirtualHostName ), m_OwnerName( nOwnerName ), m_CreatorName( nCreatorName ), m_CreatorServer( nCreatorServer ), m_HCLCommandString( nMap->GetMapDefaultHCL( ) ), m_RandomSeed( GetTicks( ) ), m_HostCounter( m_GHost->m_HostCounter++ ), m_EntryKey( rand( ) ), m_Latency( m_GHost->m_Latency ), m_SyncLimit( m_GHost->m_SyncLimit ), m_SyncCounter( 0 ), m_GameTicks( 0 ), m_CreationTime( GetTime( ) ), m_LastPingTime( GetTime( ) ), m_LastRefreshTime( GetTime( ) ), m_LastDownloadTicks( GetTime( ) ), m_DownloadCounter( 0 ), m_LastDownloadCounterResetTicks( GetTime( ) ), m_LastAnnounceTime( 0 ), m_AnnounceInterval( 0 ), m_LastAutoStartTime( GetTime( ) ), m_AutoStartPlayers( 0 ), m_LastCountDownTicks( 0 ), m_CountDownCounter( 0 ), m_StartedLoadingTicks( 0 ), m_StartPlayers( 0 ), m_LastLagScreenResetTime( 0 ), m_LastActionSentTicks( 0 ), m_LastActionLateBy( 0 ), m_StartedLaggingTime( 0 ), m_LastLagScreenTime( 0 ), m_LastReservedSeen( GetTime( ) ), m_StartedKickVoteTime( 0 ), m_GameOverTime( 0 ), m_LastPlayerLeaveTicks( 0 ), m_MinimumScore( 0. ), m_MaximumScore( 0. ), m_SlotInfoChanged( false ), m_Locked( false ), m_RefreshMessages( m_GHost->m_RefreshMessages ), m_RefreshError( false ), m_RefreshRehosted( false ), m_MuteAll( false ), m_MuteLobby( false ), m_CountDownStarted( false ), m_GameLoading( false ), m_GameLoaded( false ), m_LoadInGame( nMap->GetMapLoadInGame( ) ), m_Lagging( false ), m_AutoSave( m_GHost->m_AutoSave ), m_MatchMaking( false ), m_LocalAdminMessages( m_GHost->m_LocalAdminMessages ), m_IsAutoHostGame( false ), m_AutoHostSlotIndex( 0 ), m_AdvertisedBNet( NULL )
 {
 	m_Socket = new CTCPServer( );
 	m_Protocol = new CGameProtocol( m_GHost );
@@ -446,20 +446,31 @@ bool CBaseGame :: Update( void *fd, void *send_fd )
 		// however, if autohosting is enabled and this game is public and this game is set to autostart, it's probably autohosted
 		// so rehost it using the current autohost game name
 
-		string GameName = m_GHost->m_AutoHostGameName + " #" + UTIL_ToString( m_GHost->m_HostCounter );
+		// use fixed slot name for autohost games to keep the name stable across rehosts;
+		// fall back to HostCounter only for manual/legacy games without a slot index
+		string GameName;
+
+		if( m_IsAutoHostGame && m_AutoHostSlotIndex > 0 )
+			GameName = m_GHost->m_AutoHostGameName + " #" + UTIL_ToString( m_AutoHostSlotIndex );
+		else
+			GameName = m_GHost->m_AutoHostGameName + " #" + UTIL_ToString( m_GHost->m_HostCounter );
 		CONSOLE_Print( "[GAME: " + m_GameName + "] automatically trying to rehost as public game [" + GameName + "] due to refresh failure" );
 		m_LastGameName = m_GameName;
 		m_GameName = GameName;
 		m_HostCounter = m_GHost->m_HostCounter++;
 		m_RefreshError = false;
 
-                for( vector<CBNET *> :: iterator i = m_GHost->m_BNETs.begin( ); i != m_GHost->m_BNETs.end( ); ++i )
+		if( m_AdvertisedBNet )
 		{
-			(*i)->QueueGameUncreate( );
-			(*i)->QueueEnterChat( );
+			m_AdvertisedBNet->QueueGameUncreate( );
 
-			// the game creation message will be sent on the next refresh
+			// on PVPGN, EnterChat while in-game means "leave game" - without it the server
+			// keeps the old game name locked and the new name can't be advertised (GProxy breaks)
+			if( m_AdvertisedBNet->GetPasswordHashType( ) == "pvpgn" )
+				m_AdvertisedBNet->QueueEnterChat( );
 		}
+
+		// the game creation message will be sent on the next refresh
 
 		m_CreationTime = GetTime( );
 		m_LastRefreshTime = GetTime( );
@@ -473,15 +484,10 @@ bool CBaseGame :: Update( void *fd, void *send_fd )
 
 		bool Refreshed = false;
 
-                for( vector<CBNET *> :: iterator i = m_GHost->m_BNETs.begin( ); i != m_GHost->m_BNETs.end( ); ++i )
+		if( m_AdvertisedBNet && m_AdvertisedBNet->GetOutPacketsQueued( ) <= 1 )
 		{
-			// don't queue a game refresh message if the queue contains more than 1 packet because they're very low priority
-
-			if( (*i)->GetOutPacketsQueued( ) <= 1 )
-			{
-				(*i)->QueueGameRefresh( m_GameState, m_GameName, string( ), m_Map, m_SaveGame, 0, m_HostCounter );
-				Refreshed = true;
-			}
+			m_AdvertisedBNet->QueueGameRefresh( m_GameState, m_GameName, string( ), m_Map, m_SaveGame, 0, m_HostCounter );
+			Refreshed = true;
 		}
 
 		// only print the "game refreshed" message if we actually refreshed on at least one battle.net server
@@ -3190,6 +3196,11 @@ void CBaseGame :: EventGameRefreshed( string server )
 	}
 }
 
+string CBaseGame :: GetMapCFGFile( )
+{
+	return m_Map->GetCFGFile( );
+}
+
 void CBaseGame :: EventGameStarted( )
 {
 	CONSOLE_Print( "[GAME: " + m_GameName + "] started loading with " + UTIL_ToString( GetNumHumanPlayers( ) ) + " players" );
@@ -3378,15 +3389,37 @@ void CBaseGame :: EventGameStarted( )
 
 	// move the game to the games in progress vector
 
-	m_GHost->m_CurrentGame = NULL;
+	for( vector<CBaseGame *> :: iterator i = m_GHost->m_CurrentGames.begin( ); i != m_GHost->m_CurrentGames.end( ); ++i )
+	{
+		if( *i == this )
+		{
+			m_GHost->m_CurrentGames.erase( i );
+			break;
+		}
+	}
+
 	m_GHost->m_Games.push_back( this );
 
-	// and finally reenter battle.net chat
+	// and finally reenter battle.net chat on the advertising BNET
 
-        for( vector<CBNET *> :: iterator i = m_GHost->m_BNETs.begin( ); i != m_GHost->m_BNETs.end( ); ++i )
+	if( m_AdvertisedBNet )
 	{
-		(*i)->QueueGameUncreate( );
-		(*i)->QueueEnterChat( );
+		m_AdvertisedBNet->QueueGameUncreate( );
+
+		// only enter chat if no other lobby is still advertising on this BNET
+		bool BNetStillHasLobby = false;
+
+		for( vector<CBaseGame *> :: iterator i = m_GHost->m_CurrentGames.begin( ); i != m_GHost->m_CurrentGames.end( ); ++i )
+		{
+			if( *i != this && (*i)->GetAdvertisedBNet( ) == m_AdvertisedBNet )
+			{
+				BNetStillHasLobby = true;
+				break;
+			}
+		}
+
+		if( !BNetStillHasLobby )
+			m_AdvertisedBNet->QueueEnterChat( );
 	}
 }
 

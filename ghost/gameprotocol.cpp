@@ -795,8 +795,8 @@ BYTEARRAY CGameProtocol :: SEND_W3GS_MAPCHECK( string mapPath, BYTEARRAY mapSize
 	else
 		CONSOLE_Print( "[GAMEPROTO] invalid parameters passed to SEND_W3GS_MAPCHECK" );
 
-	// DEBUG_Print( "SENT W3GS_MAPCHECK" );
-	// DEBUG_Print( packet );
+	 // DEBUG_Print( "SENT W3GS_MAPCHECK" );
+	 // DEBUG_Print( packet );
 	return packet;
 }
 

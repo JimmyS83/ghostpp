@@ -1319,22 +1319,17 @@ bool CGame :: EventPlayerBotCommand( CGamePlayer *player, string command, string
 					m_RefreshError = false;
 					m_RefreshRehosted = true;
 
-					for( vector<CBNET *> :: iterator i = m_GHost->m_BNETs.begin( ); i != m_GHost->m_BNETs.end( ); ++i )
+					if( m_AdvertisedBNet )
 					{
-						// unqueue any existing game refreshes because we're going to assume the next successful game refresh indicates that the rehost worked
-						// this ignores the fact that it's possible a game refresh was just sent and no response has been received yet
-						// we assume this won't happen very often since the only downside is a potential false positive
-
-						(*i)->UnqueueGameRefreshes( );
-						(*i)->QueueGameUncreate( );
-						(*i)->QueueEnterChat( );
+						m_AdvertisedBNet->UnqueueGameRefreshes( );
+						m_AdvertisedBNet->QueueGameUncreate( );
+						m_AdvertisedBNet->QueueEnterChat( );
 
 						// we need to send the game creation message now because private games are not refreshed
+						m_AdvertisedBNet->QueueGameCreate( m_GameState, m_GameName, string( ), m_Map, NULL, m_HostCounter );
 
-						(*i)->QueueGameCreate( m_GameState, m_GameName, string( ), m_Map, NULL, m_HostCounter );
-
-						if( (*i)->GetPasswordHashType( ) != "pvpgn" )
-							(*i)->QueueEnterChat( );
+						if( m_AdvertisedBNet->GetPasswordHashType( ) != "pvpgn" )
+							m_AdvertisedBNet->QueueEnterChat( );
 					}
 
 					m_CreationTime = GetTime( );
@@ -1361,15 +1356,11 @@ bool CGame :: EventPlayerBotCommand( CGamePlayer *player, string command, string
 					m_RefreshError = false;
 					m_RefreshRehosted = true;
 
-					for( vector<CBNET *> :: iterator i = m_GHost->m_BNETs.begin( ); i != m_GHost->m_BNETs.end( ); ++i )
+					if( m_AdvertisedBNet )
 					{
-						// unqueue any existing game refreshes because we're going to assume the next successful game refresh indicates that the rehost worked
-						// this ignores the fact that it's possible a game refresh was just sent and no response has been received yet
-						// we assume this won't happen very often since the only downside is a potential false positive
-
-						(*i)->UnqueueGameRefreshes( );
-						(*i)->QueueGameUncreate( );
-						(*i)->QueueEnterChat( );
+						m_AdvertisedBNet->UnqueueGameRefreshes( );
+						m_AdvertisedBNet->QueueGameUncreate( );
+						m_AdvertisedBNet->QueueEnterChat( );
 
 						// the game creation message will be sent on the next refresh
 					}

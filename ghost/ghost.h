@@ -53,7 +53,7 @@ public:
 	CCRC32 *m_CRC;							// for calculating CRC's
 	CSHA1 *m_SHA;							// for calculating SHA1's
 	vector<CBNET *> m_BNETs;				// all our battle.net connections (there can be more than one)
-	CBaseGame *m_CurrentGame;				// this game is still in the lobby state
+	vector<CBaseGame *> m_CurrentGames;			// games still in the lobby state
 	CAdminGame *m_AdminGame;				// this "fake game" allows an admin who knows the password to control the bot from the local network
 	vector<CBaseGame *> m_Games;			// these games are in progress
 	CGHostDB *m_DB;							// database
@@ -63,7 +63,17 @@ public:
 	CLanguage *m_Language;					// language
 	CMap *m_Map;							// the currently loaded map
 	CMap *m_AdminMap;						// the map to use in the admin game
-	CMap *m_AutoHostMap;					// the map to use when autohosting
+	CMap *m_AutoHostMap;					// the map to use when autohosting (single-map compat)
+
+	struct CAutoHostSlot
+	{
+		CMap *Map;
+		string GameName;
+		CBNET *BNet;
+		uint32_t SlotIndex;
+		uint32_t LastAutoHostTime;
+	};
+	vector<CAutoHostSlot> m_AutoHostSlots;			// per-slot maps for multi-map autohosting
 	vector<string> m_CachedMapList;			// cache for !listmaps indexed access
 	vector<string> m_CachedCFGList;			// cache for !listcfg indexed access
 	CSaveGame *m_SaveGame;					// the save game to use
@@ -165,7 +175,8 @@ public:
 	void SetConfigs( CConfig *CFG );
 	void ExtractScripts( );
 	void LoadIPToCountryData( );
-	void CreateGame( CMap *map, unsigned char gameState, bool saveGame, string gameName, string ownerName, string creatorName, string creatorServer, bool whisper );
+	CBaseGame *GetManualLobby( );				// returns first non-autohost lobby, or NULL
+	void CreateGame( CMap *map, unsigned char gameState, bool saveGame, string gameName, string ownerName, string creatorName, string creatorServer, bool whisper, bool isAutoHostGame = false, CBNET *bnet = NULL, uint32_t autoHostSlotIndex = 0 );
 };
 
 #endif

@@ -405,7 +405,6 @@ CGHost :: CGHost( CConfig *CFG )
 	m_CRC = new CCRC32( );
 	m_CRC->Initialize( );
 	m_SHA = new CSHA1( );
-	m_CurrentGame = NULL;
 	string DBType = CFG->GetString( "db_type", "sqlite3" );
 	CONSOLE_Print( "[GHOST] opening primary database" );
 
@@ -527,6 +526,10 @@ CGHost :: CGHost( CConfig *CFG )
 
         for( uint32_t i = 1; i < 10; ++i )
 	{
+		// bnet2+ connections are only needed for multi-slot autohosting
+		if( i > 1 && m_AutoHostMaximumGames == 0 )
+			break;
+
 		string Prefix;
 
 		if( i == 1 )
@@ -665,6 +668,88 @@ CGHost :: CGHost( CConfig *CFG )
 	}
 
 	m_AutoHostMap = new CMap( *m_Map );
+
+	// load per-slot autohost maps from config (autohost_cfg1, autohost_cfg2, ...)
+	if( m_AutoHostMaximumGames > 0 )
+	{
+		bool SlotLoadError = false;
+
+		for( uint32_t s = 1; s <= m_AutoHostMaximumGames && !SlotLoadError; ++s )
+		{
+			string CfgKey = "autohost_cfg" + UTIL_ToString( s );
+			string CfgFile = CFG->GetString( CfgKey, string( ) );
+
+			if( CfgFile.empty( ) )
+				break;
+
+			if( CfgFile.size( ) < 4 || CfgFile.substr( CfgFile.size( ) - 4 ) != ".cfg" )
+				CfgFile += ".cfg";
+
+			CConfig SlotCFG;
+			SlotCFG.Read( m_MapCFGPath + CfgFile );
+			CMap *SlotMap = new CMap( this, &SlotCFG, m_MapCFGPath + CfgFile );
+
+			if( SlotMap->GetValid( ) )
+			{
+				// resolve autohost_bnetX alias to a BNET connection
+				string BNetAlias = CFG->GetString( "autohost_bnet" + UTIL_ToString( s ), string( ) );
+				CBNET *SlotBNet = NULL;
+
+				if( !BNetAlias.empty( ) )
+				{
+					for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
+					{
+						if( (*i)->GetServerAlias( ) == BNetAlias )
+						{
+							SlotBNet = *i;
+							break;
+						}
+					}
+
+					if( !SlotBNet )
+					{
+						CONSOLE_Print( "[GHOST] fatal error - autohost_bnet" + UTIL_ToString( s ) + " alias [" + BNetAlias + "] not found in any BNET connection, exiting" );
+						delete SlotMap;
+						m_Exiting = true;
+						SlotLoadError = true;
+						break;
+					}
+				}
+				else
+				{
+					// no explicit BNET alias configured for this slot:
+					// default to m_BNETs[s] so slot 1 → bnet2_, slot 2 → bnet3_, etc.
+					// m_BNETs[0] (bnet_) is always reserved for the manual lobby
+					if( m_BNETs.size( ) > s )
+						SlotBNet = m_BNETs[s];
+					else
+					{
+						CONSOLE_Print( "[GHOST] warning - not enough BNET connections for autohost slot " + UTIL_ToString( s ) + " (need bnet" + UTIL_ToString( s + 1 ) + "_ in config), using last available" );
+						SlotBNet = m_BNETs.back( );
+					}
+				}
+
+				CONSOLE_Print( "[GHOST] autohost slot " + UTIL_ToString( s ) + " loaded map [" + CfgFile + "] on BNET [" + ( SlotBNet ? SlotBNet->GetServerAlias( ) : "none" ) + "]" );
+				CAutoHostSlot Slot;
+				Slot.Map = SlotMap;
+				Slot.GameName = m_AutoHostGameName;
+				Slot.BNet = SlotBNet;
+				Slot.SlotIndex = s;
+				Slot.LastAutoHostTime = GetTime( ) + (uint32_t)( s - 1 ) * 30;
+
+				// tell PVPGN the correct port for this slot's BNET connection
+				if( SlotBNet )
+					SlotBNet->UpdateGameHostPort( (uint16_t)( m_HostPort + s ) );
+				m_AutoHostSlots.push_back( Slot );
+			}
+			else
+			{
+				CONSOLE_Print( "[GHOST] warning - autohost slot " + UTIL_ToString( s ) + " map [" + CfgFile + "] is invalid, skipping" );
+				delete SlotMap;
+			}
+		}
+	}
+
 	m_SaveGame = new CSaveGame( );
 
 	// load the iptocountry data
@@ -680,6 +765,13 @@ CGHost :: CGHost( CConfig *CFG )
 
 		if( m_AdminGamePort == m_HostPort )
 			CONSOLE_Print( "[GHOST] warning - admingame_port and bot_hostport are set to the same value, you won't be able to host any games" );
+
+		// port layout: m_HostPort = manual lobby, m_HostPort+1..+N = autohost slots 1..N
+		if( m_AutoHostMaximumGames > 0 && m_ReconnectPort > m_HostPort && m_ReconnectPort <= m_HostPort + m_AutoHostMaximumGames )
+			CONSOLE_Print( "[GHOST] warning - bot_reconnectport conflicts with autohost port range (bot_hostport+1 to bot_hostport+" + UTIL_ToString( m_AutoHostMaximumGames ) + "), GProxy++ reconnects may not work" );
+
+		if( m_AutoHostMaximumGames > 0 && m_AdminGamePort > m_HostPort && m_AdminGamePort <= m_HostPort + m_AutoHostMaximumGames )
+			CONSOLE_Print( "[GHOST] warning - admingame_port conflicts with autohost port range (bot_hostport+1 to bot_hostport+" + UTIL_ToString( m_AutoHostMaximumGames ) + ")" );
 	}
 	else
 		m_AdminGame = NULL;
@@ -709,7 +801,12 @@ CGHost :: ~CGHost( )
         for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
 		delete *i;
 
-	delete m_CurrentGame;
+	for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+		delete *i;
+
+	for( vector<CAutoHostSlot> :: iterator i = m_AutoHostSlots.begin( ); i != m_AutoHostSlots.end( ); ++i )
+		delete i->Map;
+
 	delete m_AdminGame;
 
         for( vector<CBaseGame *> :: iterator i = m_Games.begin( ); i != m_Games.end( ); ++i )
@@ -762,11 +859,14 @@ bool CGHost :: Update( long usecBlock )
 			m_BNETs.clear( );
 		}
 
-		if( m_CurrentGame )
+		if( !m_CurrentGames.empty( ) )
 		{
-			CONSOLE_Print( "[GHOST] deleting current game in preparation for exiting nicely" );
-			delete m_CurrentGame;
-			m_CurrentGame = NULL;
+			CONSOLE_Print( "[GHOST] deleting " + UTIL_ToString( m_CurrentGames.size( ) ) + " current game(s) in preparation for exiting nicely" );
+
+			for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+				delete *i;
+
+			m_CurrentGames.clear( );
 		}
 
 		if( m_AdminGame )
@@ -860,8 +960,8 @@ bool CGHost :: Update( long usecBlock )
 
 	// 2. the current game's server and player sockets
 
-	if( m_CurrentGame )
-		NumFDs += m_CurrentGame->SetFD( &fd, &send_fd, &nfds );
+	for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+		NumFDs += (*i)->SetFD( &fd, &send_fd, &nfds );
 
 	// 3. the admin game's server and player sockets
 
@@ -933,24 +1033,66 @@ bool CGHost :: Update( long usecBlock )
 	bool AdminExit = false;
 	bool BNETExit = false;
 
-	// update current game
+	// update current games (lobbies)
 
-	if( m_CurrentGame )
 	{
-		if( m_CurrentGame->Update( &fd, &send_fd ) )
-		{
-			CONSOLE_Print( "[GHOST] deleting current game [" + m_CurrentGame->GetGameName( ) + "]" );
-			delete m_CurrentGame;
-			m_CurrentGame = NULL;
+		uint32_t i = 0;
 
-                        for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
+		while( i < m_CurrentGames.size( ) )
+		{
+			CBaseGame *game = m_CurrentGames[i];
+			bool ShouldDelete = game->Update( &fd, &send_fd );
+
+			// game may have removed itself from m_CurrentGames if it started (EventGameStarted)
+			bool StillPresent = false;
+
+			for( vector<CBaseGame *> :: iterator j = m_CurrentGames.begin( ); j != m_CurrentGames.end( ); ++j )
 			{
-				(*i)->QueueGameUncreate( );
-				(*i)->QueueEnterChat( );
+				if( *j == game ) { StillPresent = true; break; }
+			}
+
+			if( !StillPresent )
+			{
+				// game started and removed itself - vector already shrank, i stays same
+				continue;
+			}
+
+			if( ShouldDelete )
+			{
+				CONSOLE_Print( "[GHOST] deleting current game [" + game->GetGameName( ) + "]" );
+
+				CBNET *AdvBNet = game->GetAdvertisedBNet( );
+
+				m_CurrentGames.erase( m_CurrentGames.begin( ) + i );
+				delete game;
+
+				if( AdvBNet )
+				{
+					AdvBNet->QueueGameUncreate( );
+
+					// only enter chat if no other lobby is advertising on this BNET
+					bool BNetStillHasLobby = false;
+
+					for( vector<CBaseGame *> :: iterator j = m_CurrentGames.begin( ); j != m_CurrentGames.end( ); ++j )
+					{
+						if( (*j)->GetAdvertisedBNet( ) == AdvBNet )
+						{
+							BNetStillHasLobby = true;
+							break;
+						}
+					}
+
+					if( !BNetStillHasLobby )
+						AdvBNet->QueueEnterChat( );
+				}
+				// i stays same, vector shrank
+			}
+			else
+			{
+				game->UpdatePost( &send_fd );
+				++i;
 			}
 		}
-		else if( m_CurrentGame )
-			m_CurrentGame->UpdatePost( &send_fd );
 	}
 
 	// update admin game
@@ -1110,67 +1252,162 @@ bool CGHost :: Update( long usecBlock )
 
 	if( !m_AutoHostGameName.empty( ) && m_AutoHostMaximumGames != 0 && m_AutoHostAutoStartPlayers != 0 && GetTime( ) - m_LastAutoHostTime >= 30 )
 	{
-		// copy all the checks from CGHost :: CreateGame here because we don't want to spam the chat when there's an error
-		// instead we fail silently and try again soon
-
-		if( !m_ExitingNice && m_Enabled && !m_CurrentGame && m_Games.size( ) < m_MaxGames && m_Games.size( ) < m_AutoHostMaximumGames )
+		if( !m_ExitingNice && m_Enabled )
 		{
-			if( m_AutoHostMap->GetValid( ) )
+			uint32_t TotalActive = (uint32_t)( m_CurrentGames.size( ) + m_Games.size( ) );
+
+			if( !m_AutoHostSlots.empty( ) )
 			{
-				string GameName = m_AutoHostGameName + " #" + UTIL_ToString( m_HostCounter );
+				// multi-slot autohosting: maintain one lobby per slot
 
-				if( GameName.size( ) <= 31 )
+				for( uint32_t s = 0; s < m_AutoHostSlots.size( ) && TotalActive < m_MaxGames; ++s )
 				{
-					CreateGame( m_AutoHostMap, GAME_PUBLIC, false, GameName, m_AutoHostOwner, m_AutoHostOwner, m_AutoHostServer, false );
+					CMap *SlotMap = m_AutoHostSlots[s].Map;
 
-					if( m_CurrentGame )
+					// check if this slot already has a lobby or running game (by slot index)
+					uint32_t ThisSlotIndex = m_AutoHostSlots[s].SlotIndex;
+					bool SlotActive = false;
+
+					for( vector<CBaseGame *> :: iterator g = m_CurrentGames.begin( ); g != m_CurrentGames.end( ); ++g )
 					{
-						m_CurrentGame->SetAutoStartPlayers( m_AutoHostAutoStartPlayers );
-
-						if( m_AutoHostMatchMaking )
+						if( (*g)->GetAutoHostSlotIndex( ) == ThisSlotIndex )
 						{
-							if( !m_Map->GetMapMatchMakingCategory( ).empty( ) )
-							{
-								if( !( m_Map->GetMapOptions( ) & MAPOPT_FIXEDPLAYERSETTINGS ) )
-									CONSOLE_Print( "[GHOST] autohostmm - map_matchmakingcategory [" + m_Map->GetMapMatchMakingCategory( ) + "] found but matchmaking can only be used with fixed player settings, matchmaking disabled" );
-								else
-								{
-									CONSOLE_Print( "[GHOST] autohostmm - map_matchmakingcategory [" + m_Map->GetMapMatchMakingCategory( ) + "] found, matchmaking enabled" );
-
-									m_CurrentGame->SetMatchMaking( true );
-									m_CurrentGame->SetMinimumScore( m_AutoHostMinimumScore );
-									m_CurrentGame->SetMaximumScore( m_AutoHostMaximumScore );
-								}
-							}
-							else
-								CONSOLE_Print( "[GHOST] autohostmm - map_matchmakingcategory not found, matchmaking disabled" );
+							SlotActive = true;
+							break;
 						}
 					}
-				}
-				else
-				{
-					CONSOLE_Print( "[GHOST] stopped auto hosting, next game name [" + GameName + "] is too long (the maximum is 31 characters)" );
-					m_AutoHostGameName.clear( );
-					m_AutoHostOwner.clear( );
-					m_AutoHostServer.clear( );
-					m_AutoHostMaximumGames = 0;
-					m_AutoHostAutoStartPlayers = 0;
-					m_AutoHostMatchMaking = false;
-					m_AutoHostMinimumScore = 0.0;
-					m_AutoHostMaximumScore = 0.0;
+
+					if( !SlotActive )
+					{
+						for( vector<CBaseGame *> :: iterator g = m_Games.begin( ); g != m_Games.end( ); ++g )
+						{
+							if( (*g)->GetAutoHostSlotIndex( ) == ThisSlotIndex )
+							{
+								SlotActive = true;
+								break;
+							}
+						}
+					}
+
+					if( SlotActive )
+						continue;
+
+					if( !SlotMap->GetValid( ) )
+					{
+						CONSOLE_Print( "[GHOST] autohost slot " + UTIL_ToString( s + 1 ) + " map [" + SlotMap->GetCFGFile( ) + "] is invalid, skipping" );
+						continue;
+					}
+
+					// use fixed slot index in game name and port - never changes regardless of host counter
+					string GameName = m_AutoHostGameName + " #" + UTIL_ToString( m_AutoHostSlots[s].SlotIndex );
+					string SlotOwner = m_AutoHostSlots[s].BNet ? m_AutoHostSlots[s].BNet->GetUserName( ) : m_AutoHostOwner;
+
+					if( GameName.size( ) > 31 )
+					{
+						CONSOLE_Print( "[GHOST] stopped auto hosting slot " + UTIL_ToString( m_AutoHostSlots[s].SlotIndex ) + ", game name [" + GameName + "] is too long" );
+						continue;
+					}
+
+					// check per-slot timer - stagger slot creation
+					if( GetTime( ) - m_AutoHostSlots[s].LastAutoHostTime < 30 )
+						continue;
+
+					size_t PrevSize = m_CurrentGames.size();
+					CreateGame(SlotMap, GAME_PUBLIC, false, GameName, SlotOwner, SlotOwner, m_AutoHostServer, false, true, m_AutoHostSlots[s].BNet, m_AutoHostSlots[s].SlotIndex);
+
+					if (m_CurrentGames.size() > PrevSize)
+					{
+						CBaseGame* NewLobby = m_CurrentGames.back();
+						NewLobby->SetAutoStartPlayers(m_AutoHostAutoStartPlayers);
+						NewLobby->SetAutoHostSlotIndex(m_AutoHostSlots[s].SlotIndex);
+
+						string SlotSuffix = " #" + UTIL_ToString(m_AutoHostSlots[s].SlotIndex);
+						string BaseVHName = m_VirtualHostName;
+
+						if (BaseVHName.size() + SlotSuffix.size() > 15)
+							BaseVHName = BaseVHName.substr(0, 15 - SlotSuffix.size());
+
+						NewLobby->SetVirtualHostName(BaseVHName + SlotSuffix);
+						m_AutoHostSlots[s].LastAutoHostTime = GetTime();
+					}
+
+					TotalActive = (uint32_t)( m_CurrentGames.size( ) + m_Games.size( ) );
 				}
 			}
 			else
 			{
-				CONSOLE_Print( "[GHOST] stopped auto hosting, map config file [" + m_AutoHostMap->GetCFGFile( ) + "] is invalid" );
-				m_AutoHostGameName.clear( );
-				m_AutoHostOwner.clear( );
-				m_AutoHostServer.clear( );
-				m_AutoHostMaximumGames = 0;
-				m_AutoHostAutoStartPlayers = 0;
-				m_AutoHostMatchMaking = false;
-				m_AutoHostMinimumScore = 0.0;
-				m_AutoHostMaximumScore = 0.0;
+				// single-map autohosting: original behavior, one lobby at a time
+
+				bool AutoHostActive = false;
+
+				for( vector<CBaseGame *> :: iterator g = m_CurrentGames.begin( ); g != m_CurrentGames.end( ); ++g )
+					if( (*g)->GetIsAutoHostGame( ) ) { AutoHostActive = true; break; }
+
+				if( !AutoHostActive )
+					for( vector<CBaseGame *> :: iterator g = m_Games.begin( ); g != m_Games.end( ); ++g )
+						if( (*g)->GetIsAutoHostGame( ) ) { AutoHostActive = true; break; }
+
+				if( !AutoHostActive && TotalActive < m_MaxGames && TotalActive < m_AutoHostMaximumGames )
+				{
+					if( m_AutoHostMap->GetValid( ) )
+					{
+						string GameName = m_AutoHostGameName + " #1";
+
+						if( GameName.size( ) <= 31 )
+						{
+							CreateGame( m_AutoHostMap, GAME_PUBLIC, false, GameName, m_AutoHostOwner, m_AutoHostOwner, m_AutoHostServer, false, true, m_BNETs.empty( ) ? NULL : m_BNETs[0], 1 );
+
+							if( !m_CurrentGames.empty( ) )
+							{
+								CBaseGame *NewLobby = m_CurrentGames.back( );
+								NewLobby->SetAutoStartPlayers( m_AutoHostAutoStartPlayers );
+								NewLobby->SetAutoHostSlotIndex( 1 );
+
+								if( m_AutoHostMatchMaking )
+								{
+									if( !m_Map->GetMapMatchMakingCategory( ).empty( ) )
+									{
+										if( !( m_Map->GetMapOptions( ) & MAPOPT_FIXEDPLAYERSETTINGS ) )
+											CONSOLE_Print( "[GHOST] autohostmm - map_matchmakingcategory [" + m_Map->GetMapMatchMakingCategory( ) + "] found but matchmaking can only be used with fixed player settings, matchmaking disabled" );
+										else
+										{
+											CONSOLE_Print( "[GHOST] autohostmm - map_matchmakingcategory [" + m_Map->GetMapMatchMakingCategory( ) + "] found, matchmaking enabled" );
+											NewLobby->SetMatchMaking( true );
+											NewLobby->SetMinimumScore( m_AutoHostMinimumScore );
+											NewLobby->SetMaximumScore( m_AutoHostMaximumScore );
+										}
+									}
+									else
+										CONSOLE_Print( "[GHOST] autohostmm - map_matchmakingcategory not found, matchmaking disabled" );
+								}
+							}
+						}
+						else
+						{
+							CONSOLE_Print( "[GHOST] stopped auto hosting, next game name [" + GameName + "] is too long (the maximum is 31 characters)" );
+							m_AutoHostGameName.clear( );
+							m_AutoHostOwner.clear( );
+							m_AutoHostServer.clear( );
+							m_AutoHostMaximumGames = 0;
+							m_AutoHostAutoStartPlayers = 0;
+							m_AutoHostMatchMaking = false;
+							m_AutoHostMinimumScore = 0.0;
+							m_AutoHostMaximumScore = 0.0;
+						}
+					}
+					else
+					{
+						CONSOLE_Print( "[GHOST] stopped auto hosting, map config file [" + m_AutoHostMap->GetCFGFile( ) + "] is invalid" );
+						m_AutoHostGameName.clear( );
+						m_AutoHostOwner.clear( );
+						m_AutoHostServer.clear( );
+						m_AutoHostMaximumGames = 0;
+						m_AutoHostAutoStartPlayers = 0;
+						m_AutoHostMatchMaking = false;
+						m_AutoHostMinimumScore = 0.0;
+						m_AutoHostMaximumScore = 0.0;
+					}
+				}
 			}
 		}
 
@@ -1185,8 +1422,8 @@ void CGHost :: EventBNETConnecting( CBNET *bnet )
 	if( m_AdminGame )
 		m_AdminGame->SendAllChat( m_Language->ConnectingToBNET( bnet->GetServer( ) ) );
 
-	if( m_CurrentGame )
-		m_CurrentGame->SendAllChat( m_Language->ConnectingToBNET( bnet->GetServer( ) ) );
+	for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+		(*i)->SendAllChat( m_Language->ConnectingToBNET( bnet->GetServer( ) ) );
 }
 
 void CGHost :: EventBNETConnected( CBNET *bnet )
@@ -1194,8 +1431,8 @@ void CGHost :: EventBNETConnected( CBNET *bnet )
 	if( m_AdminGame )
 		m_AdminGame->SendAllChat( m_Language->ConnectedToBNET( bnet->GetServer( ) ) );
 
-	if( m_CurrentGame )
-		m_CurrentGame->SendAllChat( m_Language->ConnectedToBNET( bnet->GetServer( ) ) );
+	for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+		(*i)->SendAllChat( m_Language->ConnectedToBNET( bnet->GetServer( ) ) );
 }
 
 void CGHost :: EventBNETDisconnected( CBNET *bnet )
@@ -1203,8 +1440,8 @@ void CGHost :: EventBNETDisconnected( CBNET *bnet )
 	if( m_AdminGame )
 		m_AdminGame->SendAllChat( m_Language->DisconnectedFromBNET( bnet->GetServer( ) ) );
 
-	if( m_CurrentGame )
-		m_CurrentGame->SendAllChat( m_Language->DisconnectedFromBNET( bnet->GetServer( ) ) );
+	for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+		(*i)->SendAllChat( m_Language->DisconnectedFromBNET( bnet->GetServer( ) ) );
 }
 
 void CGHost :: EventBNETLoggedIn( CBNET *bnet )
@@ -1212,8 +1449,8 @@ void CGHost :: EventBNETLoggedIn( CBNET *bnet )
 	if( m_AdminGame )
 		m_AdminGame->SendAllChat( m_Language->LoggedInToBNET( bnet->GetServer( ) ) );
 
-	if( m_CurrentGame )
-		m_CurrentGame->SendAllChat( m_Language->LoggedInToBNET( bnet->GetServer( ) ) );
+	for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+		(*i)->SendAllChat( m_Language->LoggedInToBNET( bnet->GetServer( ) ) );
 }
 
 void CGHost :: EventBNETGameRefreshed( CBNET *bnet )
@@ -1221,35 +1458,39 @@ void CGHost :: EventBNETGameRefreshed( CBNET *bnet )
 	if( m_AdminGame )
 		m_AdminGame->SendAllChat( m_Language->BNETGameHostingSucceeded( bnet->GetServer( ) ) );
 
-	if( m_CurrentGame )
-		m_CurrentGame->EventGameRefreshed( bnet->GetServer( ) );
+	for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+	{
+		if( (*i)->GetAdvertisedBNet( ) == bnet )
+			(*i)->EventGameRefreshed( bnet->GetServer( ) );
+	}
 }
 
 void CGHost :: EventBNETGameRefreshFailed( CBNET *bnet )
 {
-	if( m_CurrentGame )
+	for( vector<CBaseGame *> :: iterator g = m_CurrentGames.begin( ); g != m_CurrentGames.end( ); ++g )
 	{
-                for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-		{
-			(*i)->QueueChatCommand( m_Language->UnableToCreateGameTryAnotherName( bnet->GetServer( ), m_CurrentGame->GetGameName( ) ) );
+		CBaseGame *game = *g;
 
-			if( (*i)->GetServer( ) == m_CurrentGame->GetCreatorServer( ) )
-				(*i)->QueueChatCommand( m_Language->UnableToCreateGameTryAnotherName( bnet->GetServer( ), m_CurrentGame->GetGameName( ) ), m_CurrentGame->GetCreatorName( ), true );
+		if( game->GetAdvertisedBNet( ) != bnet )
+			continue;
+
+		if( game->GetAdvertisedBNet( ) )
+		{
+			game->GetAdvertisedBNet( )->QueueChatCommand( m_Language->UnableToCreateGameTryAnotherName( bnet->GetServer( ), game->GetGameName( ) ) );
+
+			if( !game->GetCreatorName( ).empty( ) )
+				game->GetAdvertisedBNet( )->QueueChatCommand( m_Language->UnableToCreateGameTryAnotherName( bnet->GetServer( ), game->GetGameName( ) ), game->GetCreatorName( ), true );
 		}
 
 		if( m_AdminGame )
-			m_AdminGame->SendAllChat( m_Language->BNETGameHostingFailed( bnet->GetServer( ), m_CurrentGame->GetGameName( ) ) );
+			m_AdminGame->SendAllChat( m_Language->BNETGameHostingFailed( bnet->GetServer( ), game->GetGameName( ) ) );
 
-		m_CurrentGame->SendAllChat( m_Language->UnableToCreateGameTryAnotherName( bnet->GetServer( ), m_CurrentGame->GetGameName( ) ) );
+		game->SendAllChat( m_Language->UnableToCreateGameTryAnotherName( bnet->GetServer( ), game->GetGameName( ) ) );
 
-		// we take the easy route and simply close the lobby if a refresh fails
-		// it's possible at least one refresh succeeded and therefore the game is still joinable on at least one battle.net (plus on the local network) but we don't keep track of that
-		// we only close the game if it has no players since we support game rehosting (via !priv and !pub in the lobby)
+		if( game->GetNumHumanPlayers( ) == 0 )
+			game->SetExiting( true );
 
-		if( m_CurrentGame->GetNumHumanPlayers( ) == 0 )
-			m_CurrentGame->SetExiting( true );
-
-		m_CurrentGame->SetRefreshError( true );
+		game->SetRefreshError( true );
 	}
 }
 
@@ -1258,8 +1499,8 @@ void CGHost :: EventBNETConnectTimedOut( CBNET *bnet )
 	if( m_AdminGame )
 		m_AdminGame->SendAllChat( m_Language->ConnectingToBNETTimedOut( bnet->GetServer( ) ) );
 
-	if( m_CurrentGame )
-		m_CurrentGame->SendAllChat( m_Language->ConnectingToBNETTimedOut( bnet->GetServer( ) ) );
+	for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+		(*i)->SendAllChat( m_Language->ConnectingToBNETTimedOut( bnet->GetServer( ) ) );
 }
 
 void CGHost :: EventBNETWhisper( CBNET *bnet, string user, string message )
@@ -1268,8 +1509,8 @@ void CGHost :: EventBNETWhisper( CBNET *bnet, string user, string message )
 	{
 		m_AdminGame->SendAdminChat( "[W: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
 
-		if( m_CurrentGame )
-			m_CurrentGame->SendLocalAdminChat( "[W: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
+		for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+			(*i)->SendLocalAdminChat( "[W: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
 
                 for( vector<CBaseGame *> :: iterator i = m_Games.begin( ); i != m_Games.end( ); ++i )
 			(*i)->SendLocalAdminChat( "[W: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
@@ -1282,8 +1523,8 @@ void CGHost :: EventBNETChat( CBNET *bnet, string user, string message )
 	{
 		m_AdminGame->SendAdminChat( "[L: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
 
-		if( m_CurrentGame )
-			m_CurrentGame->SendLocalAdminChat( "[L: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
+		for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+			(*i)->SendLocalAdminChat( "[L: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
 
                 for( vector<CBaseGame *> :: iterator i = m_Games.begin( ); i != m_Games.end( ); ++i )
 			(*i)->SendLocalAdminChat( "[L: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
@@ -1296,8 +1537,8 @@ void CGHost :: EventBNETEmote( CBNET *bnet, string user, string message )
 	{
 		m_AdminGame->SendAdminChat( "[E: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
 
-		if( m_CurrentGame )
-			m_CurrentGame->SendLocalAdminChat( "[E: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
+		for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+			(*i)->SendLocalAdminChat( "[E: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
 
                 for( vector<CBaseGame *> :: iterator i = m_Games.begin( ); i != m_Games.end( ); ++i )
 			(*i)->SendLocalAdminChat( "[E: " + bnet->GetServerAlias( ) + "] [" + user + "] " + message );
@@ -1306,14 +1547,29 @@ void CGHost :: EventBNETEmote( CBNET *bnet, string user, string message )
 
 void CGHost :: EventGameDeleted( CBaseGame *game )
 {
-        for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-	{
-		(*i)->QueueChatCommand( m_Language->GameIsOver( game->GetDescription( ) ) );
+	CBNET *AdvBNet = game->GetAdvertisedBNet( );
 
-		if( (*i)->GetServer( ) == game->GetCreatorServer( ) )
-			(*i)->QueueChatCommand( m_Language->GameIsOver( game->GetDescription( ) ), game->GetCreatorName( ), true );
+	if( AdvBNet )
+	{
+		AdvBNet->QueueChatCommand( m_Language->GameIsOver( game->GetDescription( ) ) );
+
+		if( !game->GetCreatorName( ).empty( ) )
+			AdvBNet->QueueChatCommand( m_Language->GameIsOver( game->GetDescription( ) ), game->GetCreatorName( ), true );
 	}
 }
+
+CBaseGame *CGHost :: GetManualLobby( )
+{
+	for( vector<CBaseGame *> :: iterator i = m_CurrentGames.begin( ); i != m_CurrentGames.end( ); ++i )
+	{
+		if( !(*i)->GetIsAutoHostGame( ) )
+			return *i;
+	}
+
+	return NULL;
+}
+
+
 
 void CGHost :: ReloadConfigs( )
 {
@@ -1550,15 +1806,12 @@ void CGHost :: LoadIPToCountryData( )
 	}
 }
 
-void CGHost :: CreateGame( CMap *map, unsigned char gameState, bool saveGame, string gameName, string ownerName, string creatorName, string creatorServer, bool whisper )
+void CGHost :: CreateGame( CMap *map, unsigned char gameState, bool saveGame, string gameName, string ownerName, string creatorName, string creatorServer, bool whisper, bool isAutoHostGame, CBNET *bnet, uint32_t autoHostSlotIndex )
 {
 	if( !m_Enabled )
 	{
-                for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-		{
-			if( (*i)->GetServer( ) == creatorServer )
-				(*i)->QueueChatCommand( m_Language->UnableToCreateGameDisabled( gameName ), creatorName, whisper );
-		}
+		if( bnet )
+			bnet->QueueChatCommand( m_Language->UnableToCreateGameDisabled( gameName ), creatorName, whisper );
 
 		if( m_AdminGame )
 			m_AdminGame->SendAllChat( m_Language->UnableToCreateGameDisabled( gameName ) );
@@ -1568,11 +1821,8 @@ void CGHost :: CreateGame( CMap *map, unsigned char gameState, bool saveGame, st
 
 	if( gameName.size( ) > 31 )
 	{
-                for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-		{
-			if( (*i)->GetServer( ) == creatorServer )
-				(*i)->QueueChatCommand( m_Language->UnableToCreateGameNameTooLong( gameName ), creatorName, whisper );
-		}
+		if( bnet )
+			bnet->QueueChatCommand( m_Language->UnableToCreateGameNameTooLong( gameName ), creatorName, whisper );
 
 		if( m_AdminGame )
 			m_AdminGame->SendAllChat( m_Language->UnableToCreateGameNameTooLong( gameName ) );
@@ -1582,11 +1832,8 @@ void CGHost :: CreateGame( CMap *map, unsigned char gameState, bool saveGame, st
 
 	if( !map->GetValid( ) )
 	{
-                for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-		{
-			if( (*i)->GetServer( ) == creatorServer )
-				(*i)->QueueChatCommand( m_Language->UnableToCreateGameInvalidMap( gameName ), creatorName, whisper );
-		}
+		if( bnet )
+			bnet->QueueChatCommand( m_Language->UnableToCreateGameInvalidMap( gameName ), creatorName, whisper );
 
 		if( m_AdminGame )
 			m_AdminGame->SendAllChat( m_Language->UnableToCreateGameInvalidMap( gameName ) );
@@ -1598,11 +1845,8 @@ void CGHost :: CreateGame( CMap *map, unsigned char gameState, bool saveGame, st
 	{
 		if( !m_SaveGame->GetValid( ) )
 		{
-                        for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-			{
-				if( (*i)->GetServer( ) == creatorServer )
-					(*i)->QueueChatCommand( m_Language->UnableToCreateGameInvalidSaveGame( gameName ), creatorName, whisper );
-			}
+			if( bnet )
+				bnet->QueueChatCommand( m_Language->UnableToCreateGameInvalidSaveGame( gameName ), creatorName, whisper );
 
 			if( m_AdminGame )
 				m_AdminGame->SendAllChat( m_Language->UnableToCreateGameInvalidSaveGame( gameName ) );
@@ -1619,11 +1863,8 @@ void CGHost :: CreateGame( CMap *map, unsigned char gameState, bool saveGame, st
 		{
 			CONSOLE_Print( "[GHOST] path mismatch, saved game path is [" + MapPath1 + "] but map path is [" + MapPath2 + "]" );
 
-                        for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-			{
-				if( (*i)->GetServer( ) == creatorServer )
-					(*i)->QueueChatCommand( m_Language->UnableToCreateGameSaveGameMapMismatch( gameName ), creatorName, whisper );
-			}
+			if( bnet )
+				bnet->QueueChatCommand( m_Language->UnableToCreateGameSaveGameMapMismatch( gameName ), creatorName, whisper );
 
 			if( m_AdminGame )
 				m_AdminGame->SendAllChat( m_Language->UnableToCreateGameSaveGameMapMismatch( gameName ) );
@@ -1633,11 +1874,8 @@ void CGHost :: CreateGame( CMap *map, unsigned char gameState, bool saveGame, st
 
 		if( m_EnforcePlayers.empty( ) )
 		{
-                        for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-			{
-				if( (*i)->GetServer( ) == creatorServer )
-					(*i)->QueueChatCommand( m_Language->UnableToCreateGameMustEnforceFirst( gameName ), creatorName, whisper );
-			}
+			if( bnet )
+				bnet->QueueChatCommand( m_Language->UnableToCreateGameMustEnforceFirst( gameName ), creatorName, whisper );
 
 			if( m_AdminGame )
 				m_AdminGame->SendAllChat( m_Language->UnableToCreateGameMustEnforceFirst( gameName ) );
@@ -1646,27 +1884,24 @@ void CGHost :: CreateGame( CMap *map, unsigned char gameState, bool saveGame, st
 		}
 	}
 
-	if( m_CurrentGame )
+	// allow multiple lobbies - only block if manual lobby exists and this is a manual create
+	CBaseGame *ManualLobby = GetManualLobby( );
+
+	if( !isAutoHostGame && ManualLobby && !ManualLobby->GetIsAutoHostGame( ) )
 	{
-                for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-		{
-			if( (*i)->GetServer( ) == creatorServer )
-				(*i)->QueueChatCommand( m_Language->UnableToCreateGameAnotherGameInLobby( gameName, m_CurrentGame->GetDescription( ) ), creatorName, whisper );
-		}
+		if( bnet )
+			bnet->QueueChatCommand( m_Language->UnableToCreateGameAnotherGameInLobby( gameName, ManualLobby->GetDescription( ) ), creatorName, whisper );
 
 		if( m_AdminGame )
-			m_AdminGame->SendAllChat( m_Language->UnableToCreateGameAnotherGameInLobby( gameName, m_CurrentGame->GetDescription( ) ) );
+			m_AdminGame->SendAllChat( m_Language->UnableToCreateGameAnotherGameInLobby( gameName, ManualLobby->GetDescription( ) ) );
 
 		return;
 	}
 
 	if( m_Games.size( ) >= m_MaxGames )
 	{
-                for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-		{
-			if( (*i)->GetServer( ) == creatorServer )
-				(*i)->QueueChatCommand( m_Language->UnableToCreateGameMaxGamesReached( gameName, UTIL_ToString( m_MaxGames ) ), creatorName, whisper );
-		}
+		if( bnet )
+			bnet->QueueChatCommand( m_Language->UnableToCreateGameMaxGamesReached( gameName, UTIL_ToString( m_MaxGames ) ), creatorName, whisper );
 
 		if( m_AdminGame )
 			m_AdminGame->SendAllChat( m_Language->UnableToCreateGameMaxGamesReached( gameName, UTIL_ToString( m_MaxGames ) ) );
@@ -1676,44 +1911,62 @@ void CGHost :: CreateGame( CMap *map, unsigned char gameState, bool saveGame, st
 
 	CONSOLE_Print( "[GHOST] creating game [" + gameName + "]" );
 
-	if( saveGame )
-		m_CurrentGame = new CGame( this, map, m_SaveGame, m_HostPort, gameState, gameName, ownerName, creatorName, creatorServer );
+	// assign host port
+	// for autohost games: static port = m_HostPort + SlotIndex (slot 1 = m_HostPort+1, slot 2 = m_HostPort+2, ...)
+	// for manual games:   always m_HostPort (static, reserved for manual use)
+	uint16_t GameHostPort;
+
+	if( isAutoHostGame )
+		GameHostPort = (uint16_t)( m_HostPort + ( autoHostSlotIndex > 0 ? autoHostSlotIndex : 1 ) );
 	else
-		m_CurrentGame = new CGame( this, map, NULL, m_HostPort, gameState, gameName, ownerName, creatorName, creatorServer );
+		GameHostPort = m_HostPort;
+
+	CONSOLE_Print( "[GHOST] assigning host port " + UTIL_ToString( GameHostPort ) + " to game [" + gameName + "]" );
+
+	CBaseGame *NewGame;
+
+	if( saveGame )
+		NewGame = new CGame( this, map, m_SaveGame, GameHostPort, gameState, gameName, ownerName, creatorName, creatorServer );
+	else
+		NewGame = new CGame( this, map, NULL, GameHostPort, gameState, gameName, ownerName, creatorName, creatorServer );
+
+	m_CurrentGames.push_back( NewGame );
+	NewGame->SetIsAutoHostGame( isAutoHostGame );
 
 	// todotodo: check if listening failed and report the error to the user
 
 	if( m_SaveGame )
 	{
-		m_CurrentGame->SetEnforcePlayers( m_EnforcePlayers );
+		NewGame->SetEnforcePlayers( m_EnforcePlayers );
 		m_EnforcePlayers.clear( );
 	}
 
-        for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
+	// bnet = the BNET connection for both advertising and creator announcements
+	// for autohost: passed as slot.BNet; for manual: passed as this (the CBNET handler)
+	CBNET *AdvertisedBNet = bnet ? bnet : ( m_BNETs.empty( ) ? NULL : m_BNETs[0] );
+
+	NewGame->SetAdvertisedBNet( AdvertisedBNet );
+
+	// send creation announcement to the creator BNET only (no broadcast to other BNETs)
+	if( bnet && !isAutoHostGame )
 	{
-		if( whisper && (*i)->GetServer( ) == creatorServer )
-		{
-			// note that we send this whisper only on the creator server
+		string AnnounceMsg = ( gameState == GAME_PRIVATE ) ?
+			m_Language->CreatingPrivateGame( gameName, ownerName ) :
+			m_Language->CreatingPublicGame( gameName, ownerName );
 
-			if( gameState == GAME_PRIVATE )
-				(*i)->QueueChatCommand( m_Language->CreatingPrivateGame( gameName, ownerName ), creatorName, whisper );
-			else if( gameState == GAME_PUBLIC )
-				(*i)->QueueChatCommand( m_Language->CreatingPublicGame( gameName, ownerName ), creatorName, whisper );
-		}
+		if( whisper )
+			bnet->QueueChatCommand( AnnounceMsg, creatorName, true );
 		else
-		{
-			// note that we send this chat message on all other bnet servers
+			bnet->QueueChatCommand( AnnounceMsg );
+	}
 
-			if( gameState == GAME_PRIVATE )
-				(*i)->QueueChatCommand( m_Language->CreatingPrivateGame( gameName, ownerName ) );
-			else if( gameState == GAME_PUBLIC )
-				(*i)->QueueChatCommand( m_Language->CreatingPublicGame( gameName, ownerName ) );
-		}
-
+	// advertise game on the assigned BNET only
+	if( AdvertisedBNet )
+	{
 		if( saveGame )
-			(*i)->QueueGameCreate( gameState, gameName, string( ), map, m_SaveGame, m_CurrentGame->GetHostCounter( ) );
+			AdvertisedBNet->QueueGameCreate( gameState, gameName, string( ), map, m_SaveGame, NewGame->GetHostCounter( ) );
 		else
-			(*i)->QueueGameCreate( gameState, gameName, string( ), map, NULL, m_CurrentGame->GetHostCounter( ) );
+			AdvertisedBNet->QueueGameCreate( gameState, gameName, string( ), map, NULL, NewGame->GetHostCounter( ) );
 	}
 
 	if( m_AdminGame )
@@ -1724,27 +1977,17 @@ void CGHost :: CreateGame( CMap *map, unsigned char gameState, bool saveGame, st
 			m_AdminGame->SendAllChat( m_Language->CreatingPublicGame( gameName, ownerName ) );
 	}
 
-	// if we're creating a private game we don't need to send any game refresh messages so we can rejoin the chat immediately
-	// unfortunately this doesn't work on PVPGN servers because they consider an enterchat message to be a gameuncreate message when in a game
-	// so don't rejoin the chat if we're using PVPGN
+	// private games: rejoin chat on the advertising BNET (except pvpgn)
+	if( gameState == GAME_PRIVATE && AdvertisedBNet && AdvertisedBNet->GetPasswordHashType( ) != "pvpgn" )
+		AdvertisedBNet->QueueEnterChat( );
 
-	if( gameState == GAME_PRIVATE )
+	// hold friends and/or clan members on the advertising BNET only
+	if( AdvertisedBNet )
 	{
-                for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-		{
-			if( (*i)->GetPasswordHashType( ) != "pvpgn" )
-				(*i)->QueueEnterChat( );
-		}
-	}
+		if( AdvertisedBNet->GetHoldFriends( ) )
+			AdvertisedBNet->HoldFriends( NewGame );
 
-	// hold friends and/or clan members
-
-        for( vector<CBNET *> :: iterator i = m_BNETs.begin( ); i != m_BNETs.end( ); ++i )
-	{
-		if( (*i)->GetHoldFriends( ) )
-			(*i)->HoldFriends( m_CurrentGame );
-
-		if( (*i)->GetHoldClan( ) )
-			(*i)->HoldClan( m_CurrentGame );
+		if( AdvertisedBNet->GetHoldClan( ) )
+			AdvertisedBNet->HoldClan( NewGame );
 	}
 }

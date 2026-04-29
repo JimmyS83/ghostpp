@@ -95,6 +95,9 @@ protected:
 	uint32_t m_AnnounceInterval;					// how many seconds to wait between sending the m_AnnounceMessage
 	uint32_t m_LastAutoStartTime;					// the last time we tried to auto start the game
 	uint32_t m_AutoStartPlayers;					// auto start the game when there are this many players or more
+	bool m_IsAutoHostGame;							// true if this lobby was created by the autohost system
+	uint32_t m_AutoHostSlotIndex;					// slot index (1-based), 0 = manual
+	CBNET *m_AdvertisedBNet;						// the BNET connection used to advertise this game
 	uint32_t m_LastCountDownTicks;					// GetTicks when the last countdown message was sent
 	uint32_t m_CountDownCounter;					// the countdown is finished when this reaches zero
 	uint32_t m_StartedLoadingTicks;					// GetTicks when the game started loading
@@ -139,6 +142,7 @@ public:
 	virtual string GetGameName( )					{ return m_GameName; }
 	virtual string GetLastGameName( )				{ return m_LastGameName; }
 	virtual string GetVirtualHostName( )			{ return m_VirtualHostName; }
+	void SetVirtualHostName( string nVirtualHostName )	{ m_VirtualHostName = nVirtualHostName; }
 	virtual string GetOwnerName( )					{ return m_OwnerName; }
 	virtual string GetCreatorName( )				{ return m_CreatorName; }
 	virtual string GetCreatorServer( )				{ return m_CreatorServer; }
@@ -155,6 +159,13 @@ public:
 	virtual void SetEnforcePlayers( vector<PIDPlayer> nEnforcePlayers )	{ m_EnforcePlayers = nEnforcePlayers; }
 	virtual void SetExiting( bool nExiting )							{ m_Exiting = nExiting; }
 	virtual void SetAutoStartPlayers( uint32_t nAutoStartPlayers )		{ m_AutoStartPlayers = nAutoStartPlayers; }
+	bool GetIsAutoHostGame( )										{ return m_IsAutoHostGame; }
+	uint32_t GetAutoHostSlotIndex( )								{ return m_AutoHostSlotIndex; }
+	void SetAutoHostSlotIndex( uint32_t nIndex )					{ m_AutoHostSlotIndex = nIndex; }
+	CBNET *GetAdvertisedBNet( )										{ return m_AdvertisedBNet; }
+	void SetAdvertisedBNet( CBNET *nAdvertisedBNet )				{ m_AdvertisedBNet = nAdvertisedBNet; }
+	void SetIsAutoHostGame( bool nIsAutoHostGame )					{ m_IsAutoHostGame = nIsAutoHostGame; }
+	string GetMapCFGFile( );
 	virtual void SetMinimumScore( double nMinimumScore )				{ m_MinimumScore = nMinimumScore; }
 	virtual void SetMaximumScore( double nMaximumScore )				{ m_MaximumScore = nMaximumScore; }
 	virtual void SetRefreshError( bool nRefreshError )					{ m_RefreshError = nRefreshError; }
