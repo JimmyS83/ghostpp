@@ -930,23 +930,38 @@ bool CBaseGame :: Update( void *fd, void *send_fd )
 
 	// finish the gameover timer
 
-	if( m_GameOverTime != 0 && GetTime( ) - m_GameOverTime >= 60 )
+	if ( m_GameOverTime != 0 && GetTime( ) - m_GameOverTime >= 60 )
 	{
-		bool AlreadyStopped = true;
+		// do not count GameOverTime, if there is available GProxy++ for reconnect
+		bool AnyoneWaitingForGProxy = false;
 
-                for( vector<CGamePlayer *> :: iterator i = m_Players.begin( ); i != m_Players.end( ); ++i )
+		for ( vector<CGamePlayer*> :: iterator i = m_Players.begin(); i != m_Players.end(); ++i )
 		{
-			if( !(*i)->GetDeleteMe( ) )
+			if ( !(*i)->GetDeleteMe( ) && (*i)->GetGProxy( ) && (*i)->GetGProxyDisconnectNoticeSent( ) )
 			{
-				AlreadyStopped = false;
+				AnyoneWaitingForGProxy = true;
 				break;
 			}
 		}
 
-		if( !AlreadyStopped )
+		if (!AnyoneWaitingForGProxy)
 		{
-			CONSOLE_Print( "[GAME: " + m_GameName + "] is over (gameover timer finished)" );
-			StopPlayers( "was disconnected (gameover timer finished)" );
+			bool AlreadyStopped = true;
+
+			for ( vector<CGamePlayer*> :: iterator i = m_Players.begin( ); i != m_Players.end( ); ++i )
+			{
+				if ( !(*i)->GetDeleteMe( ) )
+				{
+					AlreadyStopped = false;
+					break;
+				}
+			}
+
+			if ( !AlreadyStopped )
+			{
+				CONSOLE_Print("[GAME: " + m_GameName + "] is over (gameover timer finished)");
+				StopPlayers("was disconnected (gameover timer finished)");
+			}
 		}
 	}
 
