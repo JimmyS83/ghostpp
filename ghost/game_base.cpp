@@ -3418,8 +3418,10 @@ void CBaseGame :: EventGameStarted( )
 			}
 		}
 
-		if( !BNetStillHasLobby )
-			m_AdvertisedBNet->QueueEnterChat( );
+		// QueueEnterChat is called in EventGameDeleted instead
+		// to not have bot available for commands when game is not ended
+		// if( !BNetStillHasLobby )
+		// 	m_AdvertisedBNet->QueueEnterChat( );
 	}
 }
 

@@ -735,7 +735,8 @@ CGHost :: CGHost( CConfig *CFG )
 				Slot.GameName = m_AutoHostGameName;
 				Slot.BNet = SlotBNet;
 				Slot.SlotIndex = s;
-				Slot.LastAutoHostTime = GetTime( ) + (uint32_t)( s - 1 ) * 30;
+				Slot.LastAutoHostTime = 0;
+				// Slot.LastAutoHostTime = GetTime( ) + (uint32_t)( s - 1 ) * 30; // wait 30sec even when ghost is freshly started
 
 				// tell PVPGN the correct port for this slot's BNET connection
 				if( SlotBNet )
@@ -1555,6 +1556,46 @@ void CGHost :: EventGameDeleted( CBaseGame *game )
 
 		if( !game->GetCreatorName( ).empty( ) )
 			AdvBNet->QueueChatCommand( m_Language->GameIsOver( game->GetDescription( ) ), game->GetCreatorName( ), true );
+
+		// port is free, bot could go back to intercept orders
+		// but only if on this BNET connection doesnt exists another active lobby or live game
+		bool BNetStillBusy = false;
+
+		for (vector<CBaseGame*> ::iterator i = m_CurrentGames.begin(); i != m_CurrentGames.end(); ++i)
+		{
+			if ((*i)->GetAdvertisedBNet() == AdvBNet)
+			{
+				BNetStillBusy = true;
+				break;
+			}
+		}
+
+		if (!BNetStillBusy)
+		{
+			for (vector<CBaseGame*> ::iterator i = m_Games.begin(); i != m_Games.end(); ++i)
+			{
+				if ((*i)->GetAdvertisedBNet() == AdvBNet)
+				{
+					BNetStillBusy = true;
+					break;
+				}
+			}
+		}
+
+		if (!BNetStillBusy)
+			AdvBNet->QueueEnterChat();
+
+		if ( game->GetIsAutoHostGame( ) )
+		{
+			for ( uint32_t s = 0; s < m_AutoHostSlots.size( ); ++s )
+			{
+				if ( m_AutoHostSlots[s].SlotIndex == game->GetAutoHostSlotIndex( ) )
+				{
+					m_AutoHostSlots[s].LastAutoHostTime = GetTime( );
+					break;
+				}
+			}
+		}
 	}
 }
 
@@ -1961,9 +2002,12 @@ void CGHost :: CreateGame( CMap *map, unsigned char gameState, bool saveGame, st
 	}
 
 	// advertise game on the assigned BNET only
-	if( AdvertisedBNet )
+	// QueueEnterChat before GameCreate allows PVPGN to process GameCreate command
+	if ( AdvertisedBNet )
 	{
-		if( saveGame )
+		AdvertisedBNet->QueueEnterChat();
+
+		if (saveGame)
 			AdvertisedBNet->QueueGameCreate( gameState, gameName, string( ), map, m_SaveGame, NewGame->GetHostCounter( ) );
 		else
 			AdvertisedBNet->QueueGameCreate( gameState, gameName, string( ), map, NULL, NewGame->GetHostCounter( ) );
